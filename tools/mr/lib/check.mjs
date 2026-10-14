@@ -37,7 +37,7 @@ export function checkPath(repo, claim, docRel, lookup, sameRepo = true) {
   // relativo alla cartella del doc: ha senso solo se doc e codice stanno nello stesso repo
   const fromDoc = sameRepo ? posix.normalize(posix.join(posix.dirname(docRel), clean)) : null;
   if (fromDoc && !fromDoc.startsWith('..') && fromDoc !== clean) candidates.push(fromDoc);
-  // path che contiene il nome del repo (ordini/server/…, monorepo/progetti/app-web/…):
+  // path che contiene il nome del repo (ordini/server/…, monorepo/apps/app-web/…):
   // vale quello che segue il nome
   const repoName = repo.root.split('/').pop();
   const segs = clean.split('/');

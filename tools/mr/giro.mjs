@@ -18,7 +18,7 @@
  *   lei) e i repo git dentro la cartella fino a 3 livelli.
  * - Repo del codice per un doc (0.6-i): `mr.repos.yaml` del repo del doc, se c'è; altrimenti
  *   la mappa per cartella: i doc di un repo che CONTIENE la cartella del workspace (es. GL per
- *   `monorepo/progetti/lezioni/go_live.md`) si controllano sui sotto-repo del workspace, mai sul
+ *   `monorepo/apps/lezioni/go_live.md`) si controllano sui sotto-repo del workspace, mai sul
  *   repo del doc; i doc di un sotto-repo si controllano su tutti i repo del workspace tranne il
  *   contenitore esterno.
  * - Doc storici tolti dal giro (0.6-g, `isGiroHistorical`): non producono nulla.
@@ -168,7 +168,7 @@ export function workspaceRepos(path) {
   try {
     const top = git(path, ['rev-parse', '--show-toplevel']).trim();
     if (resolve(top) !== resolve(path)) {
-      // contenitore esterno (es. il monorepo per monorepo/progetti/lezioni): solo i suoi doc sotto la cartella
+      // contenitore esterno (es. il monorepo per monorepo/apps/lezioni): solo i suoi doc sotto la cartella
       if (git(path, ['ls-files', '--', '*.md']).trim()) out.push({ root: top, dir: path, outer: true });
     } else {
       out.push({ root: top, dir: path });

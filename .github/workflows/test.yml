@@ -59,7 +59,9 @@ jobs:
       - name: Nessuna scrittura senza --write
         run: bash tools/test-no-write.sh
 
+      # solo in MR: nella copia pubblica la cartella pubblico/ non c'è
       - name: Copia pubblica (MR-public) pulita
+        if: hashFiles('pubblico/esporta.mjs') != ''
         run: node pubblico/test-esporta.mjs
 
       - name: Niente API LLM né path cablati in tools/

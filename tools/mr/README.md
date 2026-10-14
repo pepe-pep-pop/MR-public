@@ -138,7 +138,7 @@ riga, non a pretendere che tutto sia documentato.
 ```yaml
 # mr.repos.yaml, nella root del repo dei doc (oppure --repos-file <f>)
 repos:                         # nome → path locale, relativo alla root del repo dei doc
-  app-web: progetti/app-web
+  app-web: apps/app-web
 map:                           # vale la PRIMA regola che corrisponde al path del doc
   - docs: "_arch/segnalazioni/workspace/app-web/**"
     repos: [app-web, self]       # self = il repo dei doc

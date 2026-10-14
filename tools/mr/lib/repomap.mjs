@@ -3,8 +3,8 @@
  *
  *   # mr.repos.yaml, nella root del repo dei doc (oppure --repos-file)
  *   repos:                          # nome → path locale, relativo alla root del repo dei doc
- *     app-web: progetti/app-web
- *     ordini: progetti/ordini
+ *     app-web: apps/app-web
+ *     ordini: apps/ordini
  *   map:                            # vale la PRIMA regola che corrisponde al path del doc
  *     - docs: "_arch/hof/app-web/**"
  *       repos: [app-web]

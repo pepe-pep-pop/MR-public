@@ -64,7 +64,7 @@ console.log('\ntest-repomap.mjs\n');
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'mr-repomap-')));
 const docs = join(base, 'docs-repo');
-const codeA = join(docs, 'codice/repo-a'); // repo annidato: come progetti/ dentro il monorepo
+const codeA = join(docs, 'codice/repo-a'); // repo annidato: come apps/ dentro il monorepo
 const codeB = join(docs, 'codice/repo-b');
 for (const r of [docs, codeA, codeB]) {
   mkdirSync(r, { recursive: true });

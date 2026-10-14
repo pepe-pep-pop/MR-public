@@ -324,14 +324,14 @@ test('--code-repo: doc in un repo, codice in un altro (R10 minimo)', () => {
   const docs = realpathSync(mkdtempSync(join(tmpdir(), 'mr-claims-docs-')));
   execFileSync('git', ['init', '-q', docs]);
   const name = root.split('/').pop();
-  write(docs, 'note.md', `# Note sul codice\n\n\`src/lib/fees.ts\`, \`monorepo/progetti/${name}/src/server.ts\`, \`src/sparito.ts\`, \`calcolaRata()\`.\n`);
+  write(docs, 'note.md', `# Note sul codice\n\n\`src/lib/fees.ts\`, \`monorepo/apps/${name}/src/server.ts\`, \`src/sparito.ts\`, \`calcolaRata()\`.\n`);
   const alone = JSON.parse(run(docs, 'claims', 'note.md', '--format', 'json').out);
   assert(alone.claims.every((c) => c.status !== 'found'), 'senza --code-repo nulla deve risultare trovato');
   const r = run(docs, 'claims', 'note.md', '--format', 'json', '--code-repo', root);
   const rep = JSON.parse(r.out);
   const st = (c) => rep.claims.find((x) => x.claim === c)?.status;
   assert(st('src/lib/fees.ts') === 'found', 'path nel repo di codice non trovato');
-  assert(st(`monorepo/progetti/${name}/src/server.ts`) === 'found', 'path con il nome del repo nel mezzo non trovato');
+  assert(st(`monorepo/apps/${name}/src/server.ts`) === 'found', 'path con il nome del repo nel mezzo non trovato');
   assert(st('src/sparito.ts') === 'not_found', 'path assente: atteso not_found');
   assert(st('calcolaRata()') === 'found', 'simbolo nel repo di codice non trovato');
   assert(rep.claims.find((x) => x.claim === 'src/lib/fees.ts').code_repo === name, 'code_repo mancante nel record');
