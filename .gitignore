@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.env.local
+.env
+*.bak
+*-tagged.json
+.pytest_cache/
+*.ttl
+# stato dello scanner (hash della run precedente): locale, rigenerabile
+mr-status.json

@@ -1,0 +1,261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://example.dev/mr/v0.5.1/schema.json",
+  "title": "Metadati Relazionali (MR) — schema del formato 0.5 (tooling v0.5.1)",
+  "description": "Schema per header YAML front matter con metadati relazionali tra documenti. Accetta mr_version 0.2 (legacy/test files), 0.3 (post Spike 4), 0.4 (estensione additiva post field test 2026-04-26) e 0.5 (2026-06-25). Il rilascio v0.5.1 non cambia il formato: aggiunge il profilo light, controllato da mr-validate --profile light (matrix.md §1.8).",
+  "type": "object",
+  "required": ["mr_version", "id", "title", "type", "owner", "created"],
+  "properties": {
+    "mr_version": {
+      "type": "string",
+      "enum": ["0.2", "0.3", "0.4", "0.5", "0.6"],
+      "description": "Versione del formato MR. 0.2 = bozza Spike 3, 0.3 = post Spike 4, 0.4 = post field test 2026-04-26, 0.5 = canonizzazione KG (2026-06-25). Il tooling v0.5.1 usa il formato 0.5"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9/_-]*[a-z0-9]$",
+      "minLength": 2,
+      "maxLength": 80,
+      "description": "Slug unico decoupled dal path. Formato: slug o {progetto}/{slug}"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "Titolo leggibile del documento"
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "guide", "how-to", "reference", "explanation", "spec", "roadmap", "report", "log", "ppd",
+        "handoff", "runbook",
+        "capsule", "cross_cutting_doc", "portfolio_view", "html_mirror", "index"
+      ],
+      "description": "Tipo del documento (Diátaxis-extended + brain-extended v0.4)"
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Responsabile del documento"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["active", "draft", "deprecated", "superseded", "paused"],
+      "default": "active",
+      "description": "Stato del ciclo di vita del documento. v0.4 aggiunge 'paused' (semantica: potrebbe tornare; differente da 'deprecated' = c'è ma non usare)"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Versione semver del documento"
+    },
+    "created": {
+      "type": "string",
+      "format": "date",
+      "description": "Data di creazione (YYYY-MM-DD)"
+    },
+    "last_updated": {
+      "type": "string",
+      "format": "date",
+      "description": "Data ultimo aggiornamento (YYYY-MM-DD)"
+    },
+    "staleness_threshold": {
+      "type": "string",
+      "pattern": "^(\\d+d|never)$",
+      "description": "Soglia staleness: Nd oppure 'never'. Ereditato da type_defaults se omesso"
+    },
+    "superseded_by": {
+      "type": "string",
+      "description": "ID del documento sostitutivo. Obbligatorio se status: superseded"
+    },
+    "review_needed": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "v0.6-z: doc ancora valido ma con parti non più vere oggi; motivo breve. Lo toglie mr rivisto --write"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/relation_entry" },
+      "description": "Se QUESTI cambiano, QUESTO documento potrebbe essere obsoleto"
+    },
+    "required_by": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/relation_entry" },
+      "description": "Se QUESTO cambia, QUESTI documenti potrebbero essere obsoleti"
+    },
+    "related_to": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/relation_entry" },
+      "description": "Relazioni non-direzionali, informative"
+    },
+    "propagate_staleness_to": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/propagation_entry" },
+      "description": "Documenti da invalidare automaticamente quando questo diventa stale"
+    },
+    "external_dependencies": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/external_dependency_entry" },
+      "description": "v0.4: dipendenze su artefatti fuori dal grafo MR (path filesystem). Il validator NON risolve questi path; lo scanner NON propaga staleness. Annotazione documentale per LLM."
+    },
+    "code_refs": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/code_ref_entry" },
+      "description": "v0.6 (PRD R1): link dichiarativi doc → codice. La deriva si calcola con mr scan; verified si aggiorna solo con un comando esplicito"
+    },
+    "ai_summary": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "Riassunto per consumo LLM"
+    },
+    "ai_keywords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 20,
+      "description": "Keywords per indicizzazione LLM"
+    },
+    "priority": {
+      "type": "string",
+      "enum": ["high", "medium", "low"],
+      "default": "medium",
+      "description": "Priorità per ordinamento LLM"
+    },
+    "_content_hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{12,64}$",
+      "description": "Hash SHA-256 del corpo documento (computed da mr-scanner)"
+    },
+    "_computed_staleness_days": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Giorni da last_updated (computed)"
+    },
+    "_computed_status": {
+      "type": "string",
+      "enum": ["fresh", "warning", "stale", "broken"],
+      "description": "Stato freshness calcolato (computed)"
+    },
+    "_last_scanned": {
+      "type": "string",
+      "format": "date",
+      "description": "Data ultimo scan (computed)"
+    },
+    "_propagated_from": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/propagated_from_entry" },
+      "description": "Lista delle propagazioni di staleness ricevute da altri documenti (computed da mr-scanner). Campo opzionale, si popola solo quando un documento sorgente con propagate_staleness_to verso questo file viene modificato sostanzialmente"
+    }
+  },
+  "if": {
+    "required": ["status"],
+    "properties": { "status": { "const": "superseded" } }
+  },
+  "then": {
+    "required": ["superseded_by"]
+  },
+  "definitions": {
+    "relation_entry": {
+      "type": "object",
+      "required": ["id", "reason"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9/_-]*[a-z0-9]$",
+          "description": "ID del documento target"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motivazione della relazione"
+        },
+        "strength": {
+          "type": "string",
+          "enum": ["strong", "weak"],
+          "description": "Forza della relazione. Default: strong per depends_on/required_by, weak per related_to"
+        },
+        "rel_type": {
+          "type": "string",
+          "enum": ["references", "implements", "extends", "see_also", "derived_from", "supersedes", "validates"],
+          "description": "Sottotipo semantico della relazione"
+        }
+      },
+      "additionalProperties": false
+    },
+    "propagation_entry": {
+      "type": "object",
+      "required": ["id", "reason"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9/_-]*[a-z0-9]$"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "propagated_from_entry": {
+      "type": "object",
+      "required": ["id", "date"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9/_-]*[a-z0-9]$",
+          "description": "ID del documento sorgente che ha propagato lo stale a questo file"
+        },
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "Data della propagazione (ultima run dello scanner che ha rilevato la modifica sostanziale)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "code_ref_entry": {
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "description": "Path relativo alla root del repo del codice; glob ammessi" },
+        "symbol": { "type": "string", "minLength": 1, "description": "Funzione, classe, route, tabella o variabile d'ambiente" },
+        "repo": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", "description": "owner/repo; assente = stesso repo del doc (o --code-repo)" },
+        "section": { "type": "string", "minLength": 1, "description": "Sezione del doc che descrive questo codice (es. \"## Sincronizzazione\")" },
+        "verified": {
+          "type": "object",
+          "required": ["commit"],
+          "properties": {
+            "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$", "description": "Commit del repo del codice all'ultimo controllo" },
+            "date": { "type": "string", "format": "date", "description": "Opzionale (nota A3 del PRD)" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "external_dependency_entry": {
+      "type": "object",
+      "required": ["path", "reason"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path dell'artefatto esterno (relativo o assoluto). Il validator non lo risolve."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Motivazione della dipendenza esterna"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["brief", "data", "tool", "repo"],
+          "description": "Categoria semantica dell'artefatto esterno (opzionale)"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,68 @@
+# Test di MR: Node (mr-validate, mr-scanner), Python (mr-kg), criterio "niente scritture senza --write".
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+        python: ['3.10', '3.12']
+    steps:
+      # action fissate per SHA (tag tra parentesi)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Dipendenze Node (lockfile)
+        run: |
+          npm ci --prefix tools/mr-validate --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tools/mr-scanner --ignore-scripts --no-audit --no-fund
+          npm ci --prefix tools/mr --ignore-scripts --no-audit --no-fund
+
+      - name: Dipendenze Python (venv, requisiti fissati)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check -q -r tools/mr-kg/requirements.txt
+          .venv/bin/pip install --disable-pip-version-check -q -r tools/mr/requirements-test.txt
+
+      - name: Test mr-validate
+        run: npm test --prefix tools/mr-validate
+
+      - name: Test mr-scanner
+        run: npm test --prefix tools/mr-scanner
+
+      - name: Test mr (claim check, scan, verify, remap)
+        run: PATH="$PWD/.venv/bin:$PATH" npm test --prefix tools/mr
+
+      - name: Test mr-kg
+        run: .venv/bin/python -m unittest discover -s tools/mr-kg/tests -v
+
+      - name: Nessuna scrittura senza --write
+        run: bash tools/test-no-write.sh
+
+      - name: Copia pubblica (MR-public) pulita
+        run: node pubblico/test-esporta.mjs
+
+      - name: Niente API LLM né path cablati in tools/
+        run: |
+          if grep -rniE "deepseek|api\.openai|base_url" tools/ --exclude-dir=node_modules; then exit 1; fi
+          if grep -rnE "/Users/|C:\\\\|progetti/" tools/ --exclude-dir=node_modules; then exit 1; fi

@@ -1,0 +1,3 @@
+# allow-list di mr per i doc di questo repo (vedi tools/mr/lib/claims.mjs)
+# Le specifiche di formato per versione sono storiche e immutabili: descrivono il tooling di allora.
+storico:formato_MR_v*.md

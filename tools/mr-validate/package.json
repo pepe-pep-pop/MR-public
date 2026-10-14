@@ -1,0 +1,20 @@
+{
+  "name": "mr-validate",
+  "version": "0.5.1",
+  "private": true,
+  "description": "Validatore Metadati Relazionali (MR): 6 livelli + profilo light. Sola lettura.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "validate": "node mr-validate.mjs",
+    "test": "node test-validate.mjs"
+  },
+  "dependencies": {
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "gray-matter": "4.0.3"
+  }
+}

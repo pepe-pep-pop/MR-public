@@ -1,0 +1,8 @@
+MR — Metadati Relazionali
+Copyright 2026 Giuseppe Lombardo
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Third-party dependencies are installed from the npm and PyPI registries through the lockfiles
+and requirements files in tools/; they are not redistributed in this repository and keep their
+own licenses.

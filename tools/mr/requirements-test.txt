@@ -1,0 +1,3 @@
+# Solo per i test di mr remap (nota A16): una riscrittura vera con git filter-repo.
+#   .venv/bin/pip install -r tools/mr/requirements-test.txt  e .venv/bin nel PATH
+git-filter-repo==2.47.0
