@@ -29,13 +29,17 @@ il dettaglio dei comandi è in [`tools/mr/README.md`](../tools/mr/README.md).
      `messaggio: <testo dell'oggetto>`, con un commento `# perché`.
    - **Repo nato da un import** (doc scritti prima e copiati in un solo commit): la riga
      `import: <sha>` fa leggere le date dal testo («Data:», «Scritto:», «Last updated:»).
-2. **Il frontmatter.** Con la skill `mr-tag` di Claude Code, un lotto piccolo alla volta: la skill
+2. **Quali doc.** `node tools/mr/mr.mjs vivi <repo> --senza-frontmatter` elenca i doc vivi senza
+   frontmatter: gli stessi che il controllo periodico conta. Restano fuori gli storici per path
+   (handoff, piani, report, cartelle datate), le cartelle nascoste e i doc esclusi
+   nell'allow-list.
+3. **Il frontmatter.** Con la skill `mr-tag` di Claude Code, un lotto piccolo alla volta: la skill
    propone, tu confermi, lei scrive e valida. Il `title` va sempre tra virgolette doppie.
    - **Catene di handoff:** il più recente è `active`, gli altri sono `superseded`, con `superseded_by`
      verso il successivo.
    - **Chiavi di altri strumenti** nello stesso blocco (`layout`, `pdf_options`…): restano,
      `mr-validate` dà solo un warning.
-3. **La validazione:**
+4. **La validazione:**
 
    ```bash
    node tools/mr-validate/mr-validate.mjs --profile light <cartella>
@@ -43,7 +47,7 @@ il dettaglio dei comandi è in [`tools/mr/README.md`](../tools/mr/README.md).
 
    Deve dare 0 errori e «0 saltati». Un frontmatter che il parser YAML non legge è un errore, con la
    riga.
-4. **Il registro:** `node tools/mr-scanner/mr-scanner.mjs <cartella> --write --profile light`
+5. **Il registro:** `node tools/mr-scanner/mr-scanner.mjs <cartella> --write --profile light`
    aggiorna la tabella di `matrix.md` (tra i marker `MR-REGISTRY-START/END`) e `mr-status.json`.
    Non tocca i doc.
 

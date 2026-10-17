@@ -7,7 +7,9 @@
  *
  * Sicurezza (PRD v0.6 N4):
  *   - non si leggono mai `.env*` (eccetto .env.example/.sample/.template), `*.pem`,
- *     `*.key`, file con SECRET o SEGRETI nel nome: readFile li rifiuta;
+ *     `*.key`, file con SECRET o SEGRETI nel nome: readFile li rifiuta. Dalla 0.6-z5 (decisione
+ *     di il maintainer) fanno eccezione i doc markdown (`.md`, `.mdx`): un doc che parla di segreti,
+ *     come `D22-secret-in-chiaro.md`, si legge come gli altri;
  *   - grep li esclude sempre, e non restituisce mai il contenuto delle righe:
  *     solo path e numero di riga.
  */
@@ -25,7 +27,7 @@ export function isSecretPath(relPath) {
   if (ENV_EXAMPLE.test(relPath)) return false;
   if (/^\.env(\.|$)/.test(base)) return true;
   if (/\.(pem|key)$/i.test(base)) return true;
-  if (/SECRET|SEGRETI/i.test(base)) return true;
+  if (/SECRET|SEGRETI/i.test(base) && !/\.mdx?$/i.test(base)) return true;
   return false;
 }
 

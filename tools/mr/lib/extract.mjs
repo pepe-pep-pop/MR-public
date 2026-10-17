@@ -122,6 +122,10 @@ export function classifySpan(raw) {
   if (m) return { kind: 'endpoint', text: t, key: m[2], method: m[1] };
 
   // comandi
+  // `bun ops/recon.ts`, `bun run scripts/x.mjs` (0.6-z5, pilota B difetto 6): bun esegue un file, non uno
+  // script di package.json; il file si cerca come path (anche per suffisso, sotto la cartella del codice)
+  m = t.match(/^bun\s+(?:run\s+)?([\w./@-]+\.(?:[cm]?[jt]sx?))(?:\s.*)?$/);
+  if (m && looksLikePath(m[1])) return { kind: 'path', text: t, key: m[1].replace(/^\.\//, '') };
   m = t.match(/^(npm|pnpm|yarn|bun)\s+(?:run\s+)?([\w:.@/-]+)(?:\s.*)?$/);
   if (m) {
     const [, pm, script] = m;

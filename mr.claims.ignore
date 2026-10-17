@@ -1,3 +1,9 @@
 # allow-list di mr per i doc di questo repo (vedi tools/mr/lib/claims.mjs)
 # Le specifiche di formato per versione sono storiche e immutabili: descrivono il tooling di allora.
 storico:formato_MR_v*.md
+# I file di pubblico/radice/ sono i doc del repo pubblico MR-public (README, LICENSE, CONTRIBUTING…):
+# descrivono un altro repo, non sono doc vivi di MR.
+doc:pubblico/radice/*
+# Casi di misura (golden, hold-out): materiale di test, non documentazione.
+storico:tests/*
+

@@ -202,7 +202,7 @@ test('suggest-links: anteprima, ancoraggio alla funzione, file intero dichiarato
     '## Costanti|src/util.ts||file',
     '## Funzione altra|src/lib/fees.ts|altra|funzione',
     '## Server|sql/001.sql|spedizioni|funzione',
-    '## Server|src/server.ts|API_TOKEN|funzione',
+    '## Server|src/server.ts|API_TOKEN|occorrenze', // 0.6-z5: letto fuori da ogni funzione: occorrenze, non funzione
     '## Server|src/server.ts|POST /api/ordini|funzione',
   ].sort();
   assert(JSON.stringify(got) === JSON.stringify(want), `proposte:\n     ${got.join('\n     ')}`);

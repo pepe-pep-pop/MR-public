@@ -87,6 +87,7 @@ run node "$MR_ROOT/tools/mr/mr.mjs" verify fixture-light/light-ok/codice.md
 run node "$MR_ROOT/tools/mr/mr.mjs" remap .
 run node "$MR_ROOT/tools/mr/mr.mjs" rivisto matrix.md
 run node "$MR_ROOT/tools/mr/mr.mjs" date matrix.md
+run node "$MR_ROOT/tools/mr/mr.mjs" vivi .
 # giro settimanale: indice FUORI dalla copia, che punta alla copia; senza --write non scrive
 printf '**Archivio:** `vecchio`.\n\n| Slug | Gruppo | Path | Nota |\n|---|---|---|---|\n| `copia` | software | `%s` | — |\n| `vecchio` | software | `%s` | — |\n' "$COPY" "$COPY" > "$WORK/indice.md"
 run node "$MR_ROOT/tools/mr/giro.mjs" --indice "$WORK/indice.md"

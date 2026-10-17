@@ -1,4 +1,18 @@
-# mr — collegamento codice ↔ documentazione (v0.6-d)
+---
+mr_version: '0.6'
+id: mr/tools-mr-readme
+title: "mr — collegamento codice ↔ documentazione"
+type: reference
+owner: rnd
+status: active
+created: '2026-10-03'
+last_updated: '2026-10-16'
+depends_on:
+  - id: mr/formato-v06-delta
+    reason: "descrive i comandi del formato 0.6 (code_refs, ancore)"
+---
+
+# mr — collegamento codice ↔ documentazione (v0.6)
 
 Comando Node per le fasi 0.6-a, b e c del PRD
 `PRD_MR_v0.6_codice-doc.md` (requisiti interni, non pubblicati). Nessuna rete, nessun LLM.
@@ -132,6 +146,32 @@ deploy, variabili di `.env.example` (solo i nomi). «Citato» = nominato in un c
 titolo di un doc non storico e non diario, o coperto da un link. File di test esclusi;
 `mr.coverage.yaml` con `exclude: [glob]`. Informativo, exit 0: serve a scegliere cosa merita una
 riga, non a pretendere che tutto sia documentato.
+
+## Frontmatter e freschezza (dalla 0.6-y)
+
+Comandi per chi tagga i doc (skill `mr-tag`) e li tiene freschi:
+
+```bash
+node tools/mr/mr.mjs vivi [<repo|dir>] [--senza-frontmatter] [--json] [--ignore-dir <d> --workspace <slug>]
+node tools/mr/mr.mjs date <doc|dir> [--redazioni <f>] [--rev <c>]
+node tools/mr/mr.mjs rivisto <doc> [--write] [--data YYYY-MM-DD] [--tieni-review]
+```
+
+- **`vivi`:** i doc vivi del repo, gli stessi che il giro conta nella «Salute dei doc», e quali hanno
+  il frontmatter (`lib/vivi.mjs`).
+- **`date`:** `created` e `last_updated` da git, senza i commit che lasciano il testo invariato e
+  senza quelli di sola redazione dichiarati in `mr.redazioni`. `import: <sha>` legge le date dal testo.
+- **`rivisto`:** il doc è stato riletto ed è ancora vero. Aggiorna solo `last_updated` e toglie
+  `review_needed`.
+
+Tutti e tre leggono soltanto, tranne `rivisto --write`.
+
+## Giro su più repo
+
+`tools/mr/giro.mjs` è il controllo periodico su tutti i workspace di un indice. Produce le
+segnalazioni con prova di deriva, le «Ancore in deriva» e la «Salute dei doc»: copertura del
+frontmatter, «in PR aperte», vecchi, da aggiornare, sospesi. Opzioni e regole sono nell'intestazione
+del file e nella skill `mr-giro`.
 
 ## Più repo: `--code-repo` e `mr.repos.yaml` (R10)
 

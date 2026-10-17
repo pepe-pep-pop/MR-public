@@ -25,6 +25,7 @@ import { classifySpan, extractClaims } from './lib/extract.mjs';
 import { Lookup } from './lib/lookup.mjs';
 import { checkClaim } from './lib/check.mjs';
 import { verifiedCause } from './lib/cause.mjs';
+import { isSecretPath } from './lib/repo.mjs';
 import { RepoView } from './lib/repo.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -238,12 +239,15 @@ test('nessuna lettura del .env: il valore segreto non compare in nessun output',
   }
 });
 
-test('doc con SECRET nel nome: saltato e dichiarato, non letto', () => {
-  write(root, 'docs/note-secret.md', `# Note\n\nValore: \`${SECRET_VALUE}\`\n`);
+test('nomi con SECRET/SEGRETI (0.6-z5): i doc .md si leggono, gli altri file no', () => {
+  write(root, 'docs/note-secret.md', '# Note sui segreti\n\nIl token sta in `src/lib/fees.ts`.\n');
   const r = run(root, 'claims', 'docs', '--format', 'json');
   const rep = JSON.parse(r.out);
-  assert(rep.skipped_docs.includes('docs/note-secret.md'), 'doc non dichiarato come saltato');
-  assert(!r.out.includes(SECRET_VALUE), 'contenuto del doc letto');
+  assert(!(rep.skipped_docs || []).includes('docs/note-secret.md') && (rep.docs_checked || rep.docs || []).toString() !== '', 'il doc .md con «secret» nel nome va letto');
+  assert(JSON.stringify(rep).includes('docs/note-secret.md'), `il doc non risulta nel report: ${r.out.slice(0, 400)}`);
+  for (const [p, atteso] of [['SEGRETI_PRODUZIONE.txt', true], ['config/app.secret.json', true], ['docs/D22-secret-in-chiaro.md', false], ['docs/SEGRETI.mdx', false], ['.env', true], ['.env.example', false], ['certs/server.key', true]]) {
+    assert(isSecretPath(p) === atteso, `isSecretPath(${p}) = ${!atteso}`);
+  }
   rmSync(join(root, 'docs/note-secret.md'));
 });
 

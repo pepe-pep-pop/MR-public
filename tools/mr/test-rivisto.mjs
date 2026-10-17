@@ -81,6 +81,10 @@ test('rifiuta: doc senza frontmatter MR, data non valida, più doc, --data fuori
   write(root, 'docs/rotto.md', DOC.replace('title: Guida', 'title: Runbook: opzione A').replace('app/guida', 'app/rotto'));
   const b = run(root, 'rivisto', 'docs/rotto.md', '--write');
   assert(b.code === 2 && /frontmatter non leggibile \(riga 4: /.test(b.err), b.err);
+  // 0.6-z5: un doc .md con «secret» nel nome si legge (prima «doc non leggibile»)
+  write(root, 'docs/D22-secret-in-chiaro.md', DOC.replace('app/guida', 'app/d22'));
+  const c = run(root, 'rivisto', 'docs/D22-secret-in-chiaro.md', '--data', '2026-10-13');
+  assert(c.code === 0 && c.out.includes('2026-02-01 → 2026-10-13'), c.out + c.err);
 });
 
 test('review_needed (0.6-z): l\'anteprima lo mostra, --write lo toglie con la data; anche su più righe', () => {

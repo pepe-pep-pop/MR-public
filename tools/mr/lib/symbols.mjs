@@ -172,3 +172,36 @@ export function normalizeBody(body) {
     .filter((l) => l.trim() !== '')
     .join('\n');
 }
+
+// nomi di funzione definiti in una riga (0.6-z5): function X, const X = (…) =>, metodo X(…) {, def X
+const FN_NAME = [
+  /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/,
+  /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\(|[A-Za-z_$][\w$]*\s*=>|function\b)/,
+  /^\s*(?:(?:public|private|protected|static|async|override|readonly)\s+)*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::[^{]+)?\{\s*$/,
+  /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/,
+];
+const NOT_FN = new Set(['if', 'for', 'while', 'switch', 'catch', 'with', 'return', 'function', 'else']);
+
+/**
+ * funzione più interna che contiene tutte le righe date (1-based), o null
+ * @returns {{ name: string, start: number, end: number } | null}
+ */
+export function enclosingFunction(text, path, righe) {
+  if (!righe.length) return null;
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lo = Math.min(...righe);
+  const hi = Math.max(...righe);
+  let best = null;
+  const visti = new Set();
+  for (let i = 0; i < lines.length && i < lo; i++) {
+    for (const re of FN_NAME) {
+      const m = lines[i].match(re);
+      if (!m || NOT_FN.has(m[1]) || visti.has(m[1])) continue;
+      visti.add(m[1]);
+      const s = findSymbol(text, m[1], path);
+      if (!s || s.level !== 'regex' || s.start > lo || s.end < hi || s.end === s.start) continue;
+      if (!best || s.end - s.start < best.end - best.start) best = { name: m[1], start: s.start, end: s.end };
+    }
+  }
+  return best;
+}

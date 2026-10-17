@@ -27,10 +27,11 @@ import { resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectMarkdownArgs } from '../lib/discover.mjs';
 import { RepoView, isSecretPath } from './lib/repo.mjs';
-import { checkDocs, loadIgnore, parseIgnore, codeExcludes, summarize } from './lib/claims.mjs';
+import { checkDocs, loadIgnore, parseIgnore, codeExcludes, summarize, IGNORE_FILE } from './lib/claims.mjs';
 import { readCodeRefs } from './lib/coderefs.mjs';
 import { readFrontmatter, historicalReason, erroreFrontmatter } from './lib/frontmatter.mjs';
-import { messaggioParser } from '../lib/illeggibile.mjs';
+import { messaggioParser, bloccoMr } from '../lib/illeggibile.mjs';
+import { nonVivo } from './lib/vivi.mjs';
 import { DriftContext, evaluateRef } from './lib/drift.mjs';
 import { parseDiff, targetDiff, findImpacted, versionOnly } from './lib/impact.mjs';
 import { RepoMap } from './lib/repomap.mjs';
@@ -40,11 +41,11 @@ import { toSegnalazioni } from './lib/segnalazione.mjs';
 import { coverage } from './lib/coverage.mjs';
 import { RemoteRepos, evaluateRemoteRef } from './lib/remote.mjs';
 import { proposeLinks, insertAnchors } from './lib/suggest.mjs';
-import { REDAZIONI_FILE, parseRedazioni, commitsDelFile, dateDaCommit, soloFrontmatterGit, dateImport } from './lib/date.mjs';
+import { REDAZIONI_FILE, parseRedazioni, commitsDelFile, dateDaCommit, soloFrontmatterGit, dateImport, commitsDiTutti, dateDiTutti } from './lib/date.mjs';
 import { toJson, toMarkdown, scanToMarkdown, summarizeRefs, impactToMarkdown, ancoraToccata } from './lib/report.mjs';
 
-export const MR_VERSION = '0.6.0-z3';
-const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date'];
+export const MR_VERSION = '0.6.0-z6';
+const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi'];
 const WRITERS = new Set(['verify', 'suggest-links', 'remap', 'rivisto']);
 
 const HELP = `
@@ -69,6 +70,10 @@ USAGE:
                                                           review_needed (--tieni-review: lo lascia).
                                                           Rifiuta un doc senza frontmatter; scrive
                                                           solo con --write
+  node tools/mr/mr.mjs vivi [<repo|dir>] [--senza-frontmatter] [--json] [--ignore-dir <d> --workspace <slug>] [--rev <c>]
+                                                          doc vivi del repo (gli stessi del giro: niente
+                                                          storici per path, codice:, doc:, storico:) e
+                                                          quali hanno il frontmatter MR. Sola lettura
   node tools/mr/mr.mjs date <doc|dir> [--redazioni <f>] [--rev <commit>]
                                                           created e last_updated da git per il
                                                           frontmatter, saltando i commit di sola
@@ -136,7 +141,7 @@ export function parseArgs(argv) {
     cmd: null, paths: [], rev: null, format: 'md', all: false, help: false, ignoreFile: null,
     codeRepos: [], externalRepos: [], codeRev: null, subjects: false, docs: [], staged: false, fail: false, includeDocs: false,
     reposFile: null, write: false, includeJournals: false, commitMap: null, acceptFallback: false, workspace: null,
-    remote: false, only: null, redazioni: null, tieniReview: false,
+    remote: false, only: null, redazioni: null, tieniReview: false, senzaFrontmatter: false, ignoreDir: null,
   };
   const args = [...argv];
   if (args[0] && !args[0].startsWith('-')) out.cmd = args.shift();
@@ -161,6 +166,9 @@ export function parseArgs(argv) {
     else if (a === '--data') out.data = need(a, args[++i]);
     else if (a === '--redazioni') out.redazioni = need(a, args[++i]);
     else if (a === '--tieni-review') out.tieniReview = true;
+    else if (a === '--senza-frontmatter') out.senzaFrontmatter = true;
+    else if (a === '--json') out.format = 'json';
+    else if (a === '--ignore-dir') out.ignoreDir = need(a, args[++i]);
     else if (a === '--only') {
       const v = need(a, args[++i]);
       const nums = String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -186,6 +194,8 @@ export function parseArgs(argv) {
   if (out.data && out.cmd && out.cmd !== 'rivisto') out.error = '--data vale solo per rivisto';
   if (out.tieniReview && out.cmd && out.cmd !== 'rivisto') out.error = '--tieni-review vale solo per rivisto';
   if (out.redazioni && out.cmd && out.cmd !== 'date') out.error = '--redazioni vale solo per date';
+  if ((out.senzaFrontmatter || out.ignoreDir) && out.cmd && out.cmd !== 'vivi') out.error = `${out.senzaFrontmatter ? '--senza-frontmatter' : '--ignore-dir'} vale solo per vivi`;
+  if (out.ignoreDir && !out.workspace) out.error = '--ignore-dir vuole anche --workspace <slug> (il file è <dir>/<slug>.ignore, come nel giro)';
   return out;
 }
 
@@ -435,7 +445,11 @@ export function runImpact(opts) {
 export function runRivisto(opts) {
   if (opts.paths.length !== 1) throw new Error('rivisto: indica un solo doc');
   const { repo, docs } = resolveDocs(opts.paths, null);
-  if (docs.length !== 1) throw new Error(`rivisto: doc non leggibile: ${opts.paths[0]}`);
+  if (docs.length !== 1) {
+    // 0.6-z4: il motivo più comune è il nome (SECRET/SEGRETI): dirlo, invece di «non leggibile»
+    if (isSecretPath(opts.paths[0])) throw new Error(`rivisto: ${opts.paths[0]} ha SECRET o SEGRETI nel nome, e MR non legge questi file per regola (anche se è un .md). Aggiorna last_updated a mano, o rinomina il doc se non contiene segreti`);
+    throw new Error(`rivisto: doc non leggibile: ${opts.paths[0]}`);
+  }
   const docRel = docs[0];
   const text = repo.readFile(docRel);
   const fm = readFrontmatter(text);
@@ -494,10 +508,14 @@ export function runDate(opts) {
   const regole = presente ? parseRedazioni(readFileSync(file, 'utf-8')) : { sha: [], messaggi: [], import: [], errori: [] };
   if (regole.errori.length) throw new Error(`${file}:\n  ${regole.errori.join('\n  ')}`);
   const fmData = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v) : null);
+  // 0.6-z4: con più di qualche doc, un solo git log per il repo e i controlli a lotti
+  const aLotti = docs.length > 3;
+  const liste = aLotti ? commitsDiTutti(repo.root, opts.rev, docs) : null;
+  const dateLotti = aLotti ? dateDiTutti(repo.root, liste, regole) : null;
   const items = docs.map((doc) => {
-    const commits = commitsDelFile(repo.root, opts.rev, doc);
+    const commits = aLotti ? liste.get(doc) : commitsDelFile(repo.root, opts.rev, doc);
     const text = repo.readFile(doc);
-    const d = dateImport(dateDaCommit(commits, regole, soloFrontmatterGit(repo.root, commits)), commits, regole, text);
+    const d = dateImport(aLotti ? dateLotti.get(doc) : dateDaCommit(commits, regole, soloFrontmatterGit(repo.root, commits)), commits, regole, text);
     const fm = readFrontmatter(text);
     return {
       doc, id: fm.id ? String(fm.id) : null, ...d,
@@ -512,6 +530,53 @@ export function runDate(opts) {
       skipped,
     },
     items,
+  };
+}
+
+/**
+ * vivi (0.6-z4): i doc vivi di un repo, gli stessi che il giro conta nella «Salute dei doc», e quali
+ * hanno il frontmatter MR. Regole: mr.claims.ignore del repo, più l'allow-list centrale
+ * <ignore-dir>/<workspace>.ignore come nel giro. Sola lettura.
+ */
+export function runVivi(opts) {
+  if (opts.paths.length > 1) throw new Error('vivi: indica un solo repo o cartella');
+  const base = resolve(opts.paths[0] || '.');
+  if (!existsSync(base) || !statSync(base).isDirectory()) throw new Error(`vivi: cartella non trovata: ${opts.paths[0] || '.'}`);
+  const view = RepoView.forPath(base, opts.rev);
+  if (!view) throw new Error(`non è dentro un repo git: ${base}`);
+  const prefix = relative(view.root, base) || '.';
+  let central = [];
+  let centralFile = null;
+  if (opts.ignoreDir) {
+    centralFile = resolve(opts.ignoreDir, `${opts.workspace}.ignore`);
+    if (existsSync(centralFile)) central = parseIgnore(readFileSync(centralFile, 'utf-8'));
+    else centralFile = `${centralFile} (assente)`;
+  }
+  const rules = [...loadIgnore(view), ...central];
+  const vivi = [];
+  const nonVivi = [];
+  for (const rel of view.listMarkdownUnder(prefix)) {
+    const nv = nonVivo(rel, rules);
+    if (nv) { nonVivi.push({ doc: rel, motivo: nv.motivo, gruppo: nv.gruppo }); continue; }
+    const text = view.readFile(rel);
+    const fm = readFrontmatter(text);
+    const frontmatter = fm && fm.id ? 'sì' : bloccoMr(text) && erroreFrontmatter(text) ? 'non leggibile' : 'no';
+    vivi.push({ doc: rel, id: fm && fm.id ? String(fm.id) : null, frontmatter });
+  }
+  const conta = (f) => vivi.filter((v) => v.frontmatter === f).length;
+  const gruppi = {};
+  for (const n of nonVivi) gruppi[n.gruppo] = (gruppi[n.gruppo] || 0) + 1;
+  return {
+    meta: {
+      tool: `mr ${MR_VERSION}`, command: 'vivi', repo: view.root.split('/').pop(), cartella: prefix, rev: opts.rev || 'working tree',
+      regole: [view.hasFile(IGNORE_FILE) ? IGNORE_FILE : null, centralFile].filter(Boolean),
+      doc_md: vivi.length + nonVivi.length, vivi: vivi.length, con_frontmatter: conta('sì'), senza: conta('no'), non_leggibile: conta('non leggibile'),
+      non_vivi: gruppi,
+    },
+    // 0.6-z6 (rilievo 4): stessa forma di `mr date --json`: una voce per doc in `items`, con `doc` e
+    // `id` (null se manca). `vivi` resta per questa versione come alias deprecato di `items`.
+    items: vivi,
+    non_vivi: nonVivi,
   };
 }
 
@@ -693,7 +758,26 @@ function dateToMarkdown({ meta, items }) {
     const ignota = x.import ? '? (sconosciuta)' : '— (mai committato)';
     L.push(`| ${x.doc} | ${x.id ?? '—'} | ${x.created ?? (x.import ? '? (sconosciuta)' : '—')} | ${x.ultimo ?? '—'} | ${x.last_updated ?? ignota} | ${x.fonte}${x.import ? ` (import ${x.import})` : ''} | ${nelFm} | ${salt} |`);
   }
-  if (meta.skipped.length) L.push('', `Non letti (SECRET/SEGRETI nel nome): ${meta.skipped.length}.`);
+  const ignote = items.filter((x) => x.import && !x.created);
+  if (ignote.length) L.push('', `Date sconosciute (${ignote.length}): doc nati nell'import senza una data nel testo. La data la sceglie chi tagga, leggendo il doc: per esempio quella del README della stessa cartella, o del primo doc che lo cita. Scrivila nel frontmatter e dichiarala nel report del lotto, con il motivo.`);
+  if (meta.skipped.length) L.push('', `Non letti (SECRET/SEGRETI nel nome): ${meta.skipped.length}. MR non legge questi file per regola: le date vanno messe a mano.`);
+  return L.join('\n');
+}
+
+function viviToMarkdown({ meta, items: vivi, non_vivi }, soloSenza) {
+  const L = [`# Doc vivi — ${meta.repo}${meta.cartella !== '.' ? ` (${meta.cartella})` : ''}`, ''];
+  L.push(`Gli stessi doc che il giro conta nella «Salute dei doc». Regole lette: ${meta.regole.length ? meta.regole.map((r) => `\`${r}\``).join(' + ') : 'nessuna'}. Versione: ${meta.rev}.`, '');
+  const g = meta.non_vivi;
+  L.push(`Doc .md: ${meta.doc_md} · **vivi: ${meta.vivi}** · con frontmatter MR: ${meta.con_frontmatter} · senza: ${meta.senza}${meta.non_leggibile ? ` · frontmatter non leggibile: ${meta.non_leggibile}` : ''}`);
+  L.push(`Non vivi: ${non_vivi.length} (storici per path ${g.storico || 0}, regole doc:/storico: ${g.regola || 0}, codice: ${g.codice || 0}, segreti ${g.segreti || 0}).`, '');
+  const rotti = vivi.filter((v) => v.frontmatter === 'non leggibile');
+  if (rotti.length) L.push(`## Frontmatter non leggibile (${rotti.length})`, '', ...rotti.map((v) => `- ${v.doc}`), '');
+  const senza = vivi.filter((v) => v.frontmatter === 'no');
+  L.push(`## Senza frontmatter (${senza.length})`, '', ...(senza.length ? senza.map((v) => `- ${v.doc}`) : ['nessuno']), '');
+  if (!soloSenza) {
+    const con = vivi.filter((v) => v.frontmatter === 'sì');
+    L.push(`## Con frontmatter (${con.length})`, '', ...(con.length ? con.map((v) => `- ${v.doc} (\`${v.id}\`)`) : ['nessuno']), '');
+  }
   return L.join('\n');
 }
 
@@ -768,7 +852,7 @@ function main() {
     console.error(`--write non è ammesso con ${opts.cmd}: il comando non scrive mai`);
     return 2;
   }
-  if (!['impact', 'coverage'].includes(opts.cmd) && !opts.paths.length) {
+  if (!['impact', 'coverage', 'vivi'].includes(opts.cmd) && !opts.paths.length) {
     console.error('Indica almeno un doc o una cartella');
     return 2;
   }
@@ -808,6 +892,14 @@ function main() {
         : `\nreview_needed lasciato (--tieni-review): «${meta.review_needed_prima}»`;
       console.log(`# Rivisto — ${meta.doc} (\`${meta.id}\`)\n\nlast_updated: ${meta.last_updated_prima ?? '(assente)'} → ${meta.last_updated}${review}\n\n${!meta.changed ? 'già aggiornato' : meta.written ? 'scritto' : 'anteprima: rilancia con --write per scriverlo'}`);
     }
+    return 0;
+  }
+  if (opts.cmd === 'vivi') {
+    const res = runVivi(opts);
+    if (opts.format === 'json') {
+      const items = opts.senzaFrontmatter ? res.items.filter((v) => v.frontmatter !== 'sì') : res.items;
+      console.log(JSON.stringify({ ...res, items, vivi: items, deprecato: { vivi: 'usa items (stessa lista); vivi sparisce dopo la 0.6-z6' } }, null, 2));
+    } else console.log(viviToMarkdown(res, opts.senzaFrontmatter));
     return 0;
   }
   if (opts.cmd === 'date') {

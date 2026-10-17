@@ -28,7 +28,7 @@
       "type": "string",
       "enum": [
         "guide", "how-to", "reference", "explanation", "spec", "roadmap", "report", "log", "ppd",
-        "handoff", "runbook",
+        "handoff", "runbook", "backlog",
         "capsule", "cross_cutting_doc", "portfolio_view", "html_mirror", "index"
       ],
       "description": "Tipo del documento (Diátaxis-extended + brain-extended v0.4)"

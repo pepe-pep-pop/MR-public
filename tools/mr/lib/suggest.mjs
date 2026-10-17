@@ -17,13 +17,19 @@
  *   - README nella cartella di una funzione (functions/<nome>/README.md, nota A19) → l'index
  *     di quella cartella, sotto il titolo principale (file intero: il file è la funzione);
  *   - nomi in maiuscolo (variabili d'ambiente, codici): solo se compaiono in un file solo o
- *     dentro la cartella del soggetto del titolo, altrimenti il link sarebbe a caso.
+ *     dentro la cartella del soggetto del titolo, altrimenti il link sarebbe a caso. Nel file, la
+ *     funzione che li legge tutti (0.6-z5: `getAuthConfig` per AUTH_ALLOWED_DOMAINS); se le righe
+ *     stanno in più funzioni, le righe stesse, con livello «occorrenze» (non «funzione»);
+ *   - path dentro un blocco di codice (0.6-z5: `docker compose -f docker-compose.tunnel.yml`, `cp
+ *     deploy/x.env.example …`): il file intero, se esiste nel repo (path esatto o suffisso unico);
+ *   - un file citato si ancora prima a un nome citato sulla stessa riga del doc (0.6-z5: anche
+ *     `valore(d) = …`, nome seguito da argomenti), poi agli altri della sezione.
  * Niente `verified`: il link proposto non è una verifica (la fa `mr verify`, R7).
  * Non si propongono link già presenti (stessa sezione, path e simbolo), né nei doc storici.
  */
 
 import { readCodeRefs } from './coderefs.mjs';
-import { findSymbol } from './symbols.mjs';
+import { findSymbol, enclosingFunction } from './symbols.mjs';
 import { remoteSlug } from './drift.mjs';
 
 function quoteAttr(v) {
@@ -58,9 +64,48 @@ export function sectionIdentifiers(text) {
     if (inFence) continue;
     const h = lines[i].match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
     if (h) section = normSection(`${h[1]} ${h[2]}`);
-    for (const m of lines[i].matchAll(/`([A-Za-z_$][\w$]{2,})(?:\(\))?`/g)) {
+    for (const id of identifiersInLine(lines[i])) {
       if (!out.has(section)) out.set(section, new Set());
-      out.get(section).add(m[1]);
+      out.get(section).add(id);
+    }
+  }
+  return out;
+}
+
+/**
+ * identificatori citati tra backtick in una riga: `calcolaQuota`, `syncCalendar()` e, dalla 0.6-z5,
+ * il nome iniziale di un'espressione con argomenti (`valore(d) = importoTotale || amount` → valore)
+ */
+export function identifiersInLine(line) {
+  const out = [];
+  for (const m of line.matchAll(/`([^`]+)`/g)) {
+    const span = m[1].trim();
+    const solo = span.match(/^([A-Za-z_$][\w$]{2,})(?:\(\))?$/);
+    const conArg = span.match(/^([A-Za-z_$][\w$]{2,})\([^)]*\)/);
+    if (solo) out.push(solo[1]);
+    else if (conArg) out.push(conArg[1]);
+  }
+  return out;
+}
+
+/** path dentro i blocchi di codice, per sezione (0.6-z5): [{section, token, line}] */
+export function pathsInCodeBlocks(text) {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let section = '';
+  let inFence = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*(```|~~~)/.test(lines[i])) { inFence = !inFence; continue; }
+    if (!inFence) {
+      const h = lines[i].match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
+      if (h) section = normSection(`${h[1]} ${h[2]}`);
+      continue;
+    }
+    const codice = lines[i].replace(/(^|\s)#\s.*$/, '');
+    for (const m of codice.matchAll(/(?:^|[\s=:'"(])((?:\.{0,2}\/)?[\w@.-]+(?:\/[\w@.-]+)*\.(?:ya?ml|json|toml|sh|[cm]?[jt]sx?|py|sql|conf|ini|example))(?=$|[\s'")|;,])/g)) {
+      const token = m[1].replace(/^\.\//, '');
+      if (/^https?:|:\/\//.test(token) || /\.mdx?$/i.test(token)) continue;
+      out.push({ section, token, line: i + 1 });
     }
   }
   return out;
@@ -169,6 +214,9 @@ export function proposeLinks(text, records, repoByName, defaultRepo, docRel = nu
   };
 
   const idents = sectionIdentifiers(text);
+  const docLines = text.replace(/\r\n?/g, '\n').split('\n');
+  const blockPaths = pathsInCodeBlocks(text);
+  for (const b of blockPaths) if (!bySection.has(b.section)) bySection.set(b.section, []);
   // anche le sezioni senza claim trovati, se il titolo nomina un soggetto (`create-cc-booking`)
   for (const m of text.replace(/\r\n?/g, '\n').matchAll(/^(#{1,6})\s+(.+?)\s*#*\s*$/gm)) {
     const sec = normSection(`${m[1]} ${m[2]}`);
@@ -225,7 +273,15 @@ export function proposeLinks(text, records, repoByName, defaultRepo, docRel = nu
         const inSubject = code.find((e) => subjectDirs.some((d) => e.path.startsWith(d + '/')));
         const files = new Set(code.map((e) => e.path));
         const pick = inSubject || (files.size === 1 ? code[0] : null);
-        if (pick) push({ path: pick.path, symbol: r.key, level: 'funzione', reason: 'nome in maiuscolo: righe in cui compare' });
+        if (pick) {
+          // la funzione che lo legge, se tutte le righe stanno in una (0.6-z5, pilota B difetto 2)
+          const t = content(repo, pick.path);
+          const occ = t === null ? null : findSymbol(t, r.key, pick.path);
+          const righe = occ?.lines || (occ ? [occ.start] : []);
+          const fn = t === null ? null : enclosingFunction(t, pick.path, righe);
+          if (fn) push({ path: pick.path, symbol: fn.name, level: 'funzione', reason: `nome in maiuscolo letto solo dentro \`${fn.name}\`` });
+          else push({ path: pick.path, symbol: r.key, level: 'occorrenze', reason: 'nome in maiuscolo: righe in cui compare (non sta in una sola funzione)' });
+        }
       } else if (r.kind === 'table' && ev.line) {
         const sym = [...r.key.split('.')].reverse().find((part) => resolves(repo, ev.path, part));
         if (sym) push({ path: ev.path, symbol: sym, level: 'funzione', reason: 'tabella/colonna, definizione trovata' });
@@ -235,10 +291,22 @@ export function proposeLinks(text, records, repoByName, defaultRepo, docRel = nu
         if (resolves(repo, ev.path, sym)) push({ path: ev.path, symbol: sym, level: 'funzione', reason: 'route trovata' });
         else push({ path: ev.path, level: 'file', reason: 'file intero: la route non si risolve come blocco' });
       } else if (r.kind === 'path' && ev.path && !ev.path.endsWith('/')) {
-        const sym = candidates.find((id) => resolves(repo, ev.path, id));
+        // prima i nomi citati sulla stessa riga del file (0.6-z5: «`hubspot.server.ts` … `valore(d) = …`»)
+        const stessaRiga = identifiersInLine(docLines[r.line - 1] || '');
+        const sym = [...stessaRiga, ...candidates].find((id) => resolves(repo, ev.path, id));
         if (sym) push({ path: ev.path, symbol: sym, level: 'funzione', reason: `file citato, ancorato a ${sym} citato nella sezione` });
         else push({ path: ev.path, level: 'file', reason: 'file intero: nessun simbolo della sezione si risolve in questo file' });
       }
+    }
+
+    // path nei blocchi di codice (0.6-z5, pilota B difetto 5): file intero, se esiste nel repo
+    const files = defaultRepo.listFiles();
+    for (const b of blockPaths.filter((x) => x.section === section)) {
+      const esatto = files.includes(b.token) ? b.token : null;
+      const suff = esatto ? [] : files.filter((f) => f.endsWith('/' + b.token));
+      const path = esatto || (suff.length === 1 ? suff[0] : null);
+      if (!path || /\.mdx?$/i.test(path)) continue;
+      proposals.push({ section, path, level: 'file', reason: 'path in un blocco di codice: file intero', from: `blocco di codice \`${b.token}\` (riga ${b.line})` });
     }
 
     // dedup: stessa coppia path/simbolo una volta; il file intero cade se c'è già un simbolo dello stesso file

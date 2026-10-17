@@ -24,7 +24,9 @@ const MAX_CAUSES = 60;
 // 0.6-r: tolto/rimosso/eliminato/cancellato/sostituito non stanno più qui (valevano per tutti i nomi
 // del paragrafo): li guarda verboLegato, legati al nome. Restano nel titolo della sezione.
 // 0.6-s: lo stesso per deprecato/dismesso/sparito/superato e removed/deleted/deprecated/replaced
-const PAST_VERBS = "\\b(rimoss[oaie]|tolt[oaie]|eliminat[oaie]|cancellat[oaie]|sostituit[oaie]|deprecat[oaie]|dismess[oaie]|sparit[oaie]|superat[oaie]|removed|deleted|deprecated|replaced)\\b";
+// 0.6-z5: «superato» nel titolo vale solo come «superato da/dall'…» (nel titolo «Test superati» o
+// «Gate superato» vuol dire «passato», come nella riga: verbo.mjs, SUPERSEDED)
+const PAST_VERBS = "\\b(rimoss[oaie]|tolt[oaie]|eliminat[oaie]|cancellat[oaie]|sostituit[oaie]|deprecat[oaie]|dismess[oaie]|sparit[oaie]|removed|deleted|deprecated|replaced)\\b|\\bsuperat[oaie]\\s+(?:da|dal|dalla|dallo|dai|dalle|dagli|dall['’])";
 const NARRATIVE_PARTS = [
   "\\bno longer\\b",
   "non c'è più|non esiste più|non esistono più|non ci sono più",

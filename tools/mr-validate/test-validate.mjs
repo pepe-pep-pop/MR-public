@@ -14,7 +14,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -227,6 +227,61 @@ test('frontmatter non leggibile (0.6-z3): i tre titoli di portale-b senza virgol
   assert(/altro\.md: frontmatter non leggibile \(riga 2: .*senza mr_version/.test(r.out) && !/altro\.md/.test(errori), 'senza mr_version: warning, non errore');
   assert(/File con frontmatter non leggibile \(saltati\): 4/.test(r.out) && /\|  4 saltati \(frontmatter non leggibile\)/.test(r.out), 'riepilogo dei saltati assente');
   assert(/Documenti analizzati: 1\b/.test(r.out) && !/ok\.md: frontmatter/.test(r.out), 'il titolo tra virgolette si legge');
+});
+
+test('status paused (0.6-z5): nessun warning stale né «da aggiornare», freshness «paused»', () => {
+  const d = tmpDocs({ 'sospeso.md': 'id: t/sospeso\ntitle: "Sospeso"\ntype: reference\nowner: t\nstatus: paused\nreview_needed: "da rifare"' });
+  const r = run('--profile', 'light', d);
+  rmSync(d, { recursive: true, force: true });
+  assert(r.code === 0 && !/sospeso\.md: Documento stale/.test(r.out) && !/sospeso\.md: da aggiornare/.test(r.out), r.out.slice(0, 1500));
+  assert(/t\/sospeso .*paused/.test(r.out), 'freshness paused non mostrata');
+});
+
+// backlog (0.6-z6): body con le sezioni dello schema standard
+function backlogBody(aggiornato) {
+  return ['', '# App — backlog', '', '## In corso', '| ID | Cosa | Perché | Chi | Aggiornato | Link |', '|---|---|---|---|---|---|',
+    `| B-001 | Login | sicurezza | agente | ${aggiornato[0]} | — |`, `| B-002 | Export | report | agente | ${aggiornato[1]} | — |`,
+    '', '## Prossimi (in ordine di priorità)', '| ID | Cosa | Perché | Chi | Aggiornato | Link |', '|---|---|---|---|---|---|', '| B-003 | Vecchia | x | y | 2020-01-01 | — |', ''].join('\n');
+}
+
+test('tipo backlog (0.6-z6): nessun vincolo di relazioni; vecchio solo per voci «In corso» ferme oltre 14 giorni', () => {
+  const oggi = new Date();
+  const g = (n) => new Date(oggi.getTime() - n * 86400000).toISOString().slice(0, 10);
+  const it = (n) => { const d = new Date(oggi.getTime() - n * 86400000); return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`; };
+  const d = tmpDocs({
+    'fresco.md': 'id: t/fresco\ntitle: "Fresco"\ntype: backlog\nowner: t\nstatus: active',
+    'fermo.md': 'id: t/fermo\ntitle: "Fermo"\ntype: backlog\nowner: t\nstatus: active',
+    'soglia.md': 'id: t/soglia\ntitle: "Soglia"\ntype: backlog\nowner: t\nstatus: active\nstaleness_threshold: 30d',
+    'senza.md': 'id: t/senza\ntitle: "Senza data"\ntype: backlog\nowner: t\nstatus: active',
+  });
+  const add = (f, body) => writeFileSync(join(d, f), readFileSync(join(d, f), 'utf-8') + body);
+  add('fresco.md', backlogBody([g(3), it(10)]));      // created/last_updated del 2026-01-01: la data del file non conta
+  add('fermo.md', backlogBody([g(20), g(2)]));
+  add('soglia.md', backlogBody([g(20), g(2)]));
+  add('senza.md', backlogBody(['?', g(1)]));
+  const r = run('--profile', 'light', d);
+  rmSync(d, { recursive: true, force: true });
+  assert(r.code === 0, `exit atteso 0, ottenuto ${r.code}\n${r.out.slice(0, 1500)}`);
+  assert(!/Vincolo tipo/.test(r.out) && !/campo fuori profilo/.test(r.out), 'nessun vincolo di relazioni né campi fuori profilo');
+  assert(!/fresco\.md: (Backlog|Documento stale)/.test(r.out), 'backlog fresco: niente warning, anche col file del 2026-01-01');
+  assert(/fermo\.md: Backlog: 1 voce «In corso» ferma da più di 14 giorni: B-001 \(20 g\)/.test(r.out), r.out.slice(0, 2000));
+  assert(!/soglia\.md: Backlog/.test(r.out), 'staleness_threshold: 30d alza la soglia');
+  assert(/senza\.md: Backlog: 1 senza una data leggibile in «Aggiornato»: B-001/.test(r.out), 'riga senza data segnalata');
+  assert(/t\/fermo .*stale/.test(r.out) && /t\/fresco .*fresh/.test(r.out), 'freshness della tabella');
+});
+
+test('vincoli di tipo (0.6-z6): spenti sui doc chiusi e con `depends_on: []` esplicito; restano sugli altri', () => {
+  const d = tmpDocs({
+    'report-chiuso.md': 'id: t/report-chiuso\ntitle: "Report"\ntype: report\nowner: t\nstatus: deprecated',
+    'spec-superata.md': 'id: t/spec-superata\ntitle: "Spec"\ntype: spec\nowner: t\nstatus: superseded\nsuperseded_by: t/roadmap-vuota',
+    'roadmap-vuota.md': 'id: t/roadmap-vuota\ntitle: "Roadmap"\ntype: roadmap\nowner: t\nstatus: active\ndepends_on: []',
+    'roadmap-attiva.md': 'id: t/roadmap-attiva\ntitle: "Roadmap"\ntype: roadmap\nowner: t\nstatus: active',
+  });
+  const r = run('--profile', 'light', d);
+  rmSync(d, { recursive: true, force: true });
+  assert(!/report-chiuso\.md: Vincolo tipo/.test(r.out) && !/spec-superata\.md: Vincolo tipo/.test(r.out), 'doc chiusi: nessun vincolo di tipo');
+  assert(!/roadmap-vuota\.md: Vincolo tipo/.test(r.out) && !/roadmap-vuota\.md:.*(Schema|fuori profilo)/.test(r.out), '`depends_on: []` esplicito: nessun vincolo, schema valido');
+  assert(/roadmap-attiva\.md: Vincolo tipo: un "roadmap" dovrebbe avere almeno un depends_on/.test(r.out), 'il vincolo resta su un doc attivo senza depends_on');
 });
 
 const passed = results.filter(Boolean).length;

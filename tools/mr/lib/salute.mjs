@@ -11,6 +11,8 @@
  *     l'azione accanto (0.6-y): rileggi; se è ancora vero `mr rivisto <doc> --write`.
  * In più (0.6-z) i doc «da aggiornare»: `review_needed: "<motivo>"`, validi ma con parti non più vere.
  * Non sono problemi del frontmatter: hanno un conteggio e una lista a parte.
+ * Doc `status: paused` (0.6-z5, progetti sospesi come app-sospesa): non sono vecchi né da aggiornare,
+ * si contano a parte come «sospesi».
  * Un frontmatter con `mr_version` che il parser non legge (0.6-z3, es. `title: A: b` senza virgolette)
  * conta tra i doc con frontmatter, con il problema «frontmatter non leggibile»: non sparisce dal conto.
  * Le soglie sono quelle di mr-validate (STALENESS_DEFAULTS); se cambiano lì, vanno cambiate qui.
@@ -20,6 +22,7 @@
 
 import { readFrontmatter, erroreFrontmatter } from './frontmatter.mjs';
 import { bloccoMr, testoIlleggibile } from '../../lib/illeggibile.mjs';
+import { vociFerme, sogliaBacklog, descriviFerme } from '../../lib/backlog.mjs';
 
 export const LIGHT_REQUIRED = ['mr_version', 'id', 'title', 'type', 'owner', 'status', 'created', 'last_updated'];
 
@@ -66,7 +69,7 @@ export function saluteDocs(docs, oggi, storici = []) {
   };
   for (const { doc, text } of docs) {
     const fm = readFrontmatter(text);
-    if (fm && fm.id) tag.push({ doc, fm });
+    if (fm && fm.id) tag.push({ doc, fm, text });
     else if (rotto(doc, text)) rottiVivi++;
     else senza.push(doc);
   }
@@ -75,7 +78,7 @@ export function saluteDocs(docs, oggi, storici = []) {
   // loro id servono ai riferimenti e i loro problemi si vedono
   for (const { doc, text } of storici) {
     const fm = readFrontmatter(text);
-    if (fm && fm.id) tag.push({ doc, fm });
+    if (fm && fm.id) tag.push({ doc, fm, text });
     else rotto(doc, text);
   }
   const ids = new Map();
@@ -87,7 +90,10 @@ export function saluteDocs(docs, oggi, storici = []) {
   let vecchi = 0;
   const riferimenti = [];
   const daAggiornare = [];
-  for (const { doc, fm } of tag) {
+  let sospesi = 0;
+  const viviSet = new Set(docs.map((d) => d.doc));
+  const vivo = (d) => viviSet.has(d);
+  for (const { doc, fm, text } of tag) {
     const mancanti = LIGHT_REQUIRED.filter((k) => fm[k] === undefined || fm[k] === null || fm[k] === '');
     if (mancanti.length) problemi.push({ doc, problema: `campi mancanti: ${mancanti.join(', ')}` });
     const status = String(fm.status || '').toLowerCase();
@@ -99,8 +105,20 @@ export function saluteDocs(docs, oggi, storici = []) {
       if (d) riferimenti.push({ doc, campo: 'depends_on', id: String(d) });
     }
     const motivo = typeof fm.review_needed === 'string' ? fm.review_needed.trim() : '';
+    if (status === 'paused') {
+      if (vivo(doc)) sospesi++;
+      continue;
+    }
     if (motivo && !STORICI.has(status)) daAggiornare.push({ doc, motivo });
-    if (!STORICI.has(status)) {
+    if (!STORICI.has(status) && fm.type === 'backlog') {
+      // backlog (0.6-z6): vecchio se una voce «In corso» è ferma oltre la soglia, non per la data del file
+      const soglia = sogliaBacklog(fm.staleness_threshold);
+      const r = soglia === Infinity ? null : vociFerme(text, oggi, soglia);
+      if (r && r.ferme.length) {
+        vecchi++;
+        problemi.push({ doc, vecchio: true, problema: `backlog: ${descriviFerme(r, soglia)} → aggiorna quelle righe (stato o «Aggiornato»)` });
+      }
+    } else if (!STORICI.has(status)) {
       const g = giorni(fm.last_updated || fm.created, oggi);
       const s = soglia(fm);
       if (g !== null && s !== Infinity && g >= s) {
@@ -110,5 +128,5 @@ export function saluteDocs(docs, oggi, storici = []) {
       }
     }
   }
-  return { vivi: docs.length, taggati: taggatiVivi, taggatiStorici: tag.length + rottiVivi - taggatiVivi, senza, vecchi, problemi, daAggiornare, ids: [...ids.keys()], riferimenti };
+  return { vivi: docs.length, taggati: taggatiVivi, taggatiStorici: tag.length + rottiVivi - taggatiVivi, senza, vecchi, sospesi, problemi, daAggiornare, ids: [...ids.keys()], riferimenti };
 }

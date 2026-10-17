@@ -42,6 +42,7 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { collectMarkdownArgs } from '../lib/discover.mjs';
 import { bloccoMr, testoIlleggibile } from '../lib/illeggibile.mjs';
+import { vociFerme, sogliaBacklog, descriviFerme } from '../lib/backlog.mjs';
 
 // ── Config ──
 
@@ -171,7 +172,7 @@ class ValidationReport {
       for (const doc of this.documents) {
         const days = doc.stalenessDays !== null ? String(doc.stalenessDays) : 'n/a';
         const thresh = doc.threshold === Infinity ? 'never' : `${doc.threshold}d`;
-        const icon = { fresh: '🟢', warning: '🟡', stale: '🔴', unknown: '⚪', retired: '⚫' }[doc.freshnessStatus];
+        const icon = { fresh: '🟢', warning: '🟡', stale: '🔴', unknown: '⚪', retired: '⚫', paused: '⏸️' }[doc.freshnessStatus];
         console.log(`  ${doc.id.padEnd(28)} ${doc.type.padEnd(12)} ${days.padEnd(8)} ${thresh.padEnd(8)} ${icon} ${doc.freshnessStatus}`);
       }
       console.log('  ' + '-'.repeat(75));
@@ -259,7 +260,7 @@ function validate(mdFiles, baseDir, profile = 'full') {
     }
 
     // ── Livello 1a-ter: review_needed (0.6-z): il doc dichiara parti da aggiornare ──
-    if (typeof data.review_needed === 'string' && data.review_needed.trim() && data.status !== 'superseded' && data.status !== 'deprecated') {
+    if (typeof data.review_needed === 'string' && data.review_needed.trim() && !['superseded', 'deprecated', 'paused'].includes(data.status)) {
       report.warn(rel, `da aggiornare (review_needed): ${data.review_needed.trim()}`);
     }
 
@@ -295,9 +296,19 @@ function validate(mdFiles, baseDir, profile = 'full') {
     const stalenessDays = daysBetween(data.last_updated || data.created, now);
     const threshold = parseStalenessThreshold(data.staleness_threshold, data.type);
     let freshnessStatus = 'unknown';
+    let backlogInfo = null;
     // un doc superato o dismesso non invecchia: è fuori servizio per definizione (0.6-l)
     if (data.status === 'superseded' || data.status === 'deprecated') {
       freshnessStatus = 'retired';
+    } else if (data.status === 'paused') {
+      // progetto sospeso (0.6-z5): non invecchia finché è in pausa
+      freshnessStatus = 'paused';
+    } else if (data.type === 'backlog') {
+      // backlog (0.6-z6): la freschezza sono le voci «In corso» con «Aggiornato» oltre la soglia
+      const soglia = sogliaBacklog(data.staleness_threshold);
+      const r = soglia === Infinity ? null : vociFerme(raw, now, soglia);
+      freshnessStatus = r && r.ferme.length ? 'stale' : 'fresh';
+      backlogInfo = r ? { r, soglia } : null;
     } else if (stalenessDays !== null && threshold !== Infinity) {
       if (stalenessDays < threshold * 0.7) freshnessStatus = 'fresh';
       else if (stalenessDays < threshold) freshnessStatus = 'warning';
@@ -317,6 +328,7 @@ function validate(mdFiles, baseDir, profile = 'full') {
       threshold,
       freshnessStatus,
       file: rel,
+      ...(backlogInfo ? { backlog: backlogInfo } : {}),
     });
   }
 
@@ -390,10 +402,18 @@ function validate(mdFiles, baseDir, profile = 'full') {
     }
 
     // ── Livello 4: Vincoli di tipo ──
-    if (data.type === 'report' && !data.depends_on?.length) {
+    // 0.6-z6 (rilievi 1-2 dello sprint): le relazioni «tipiche» non servono a un doc chiuso
+    // (deprecated, superseded); e `depends_on: []` scritto esplicitamente vuol dire «verificato:
+    // nessuna dipendenza da dichiarare» (per esempio il bersaglio plausibile è un piano storico)
+    const chiuso = data.status === 'deprecated' || data.status === 'superseded';
+    const nessunaDip = Array.isArray(data.depends_on) && data.depends_on.length === 0;
+    if (chiuso) {
+      // nessun vincolo di tipo
+    } else {
+    if (data.type === 'report' && !data.depends_on?.length && !nessunaDip) {
       report.warn(file, `Vincolo tipo: un "report" dovrebbe avere almeno un depends_on`);
     }
-    if (data.type === 'roadmap' && !data.depends_on?.length) {
+    if (data.type === 'roadmap' && !data.depends_on?.length && !nessunaDip) {
       report.warn(file, `Vincolo tipo: un "roadmap" dovrebbe avere almeno un depends_on verso spec o ppd`);
     }
     if (data.type === 'spec' && requiredByCount(id, data) === 0) {
@@ -403,14 +423,15 @@ function validate(mdFiles, baseDir, profile = 'full') {
     if (data.type === 'capsule' && requiredByCount(id, data) === 0) {
       report.warn(file, `Vincolo tipo: una "capsule" dovrebbe avere almeno un required_by (la capsule serve a una portfolio_view)`);
     }
-    if (data.type === 'portfolio_view' && !data.depends_on?.length) {
+    if (data.type === 'portfolio_view' && !data.depends_on?.length && !nessunaDip) {
       report.warn(file, `Vincolo tipo: una "portfolio_view" dovrebbe avere almeno un depends_on verso le capsule`);
     }
-    if (data.type === 'html_mirror' && !data.depends_on?.length) {
+    if (data.type === 'html_mirror' && !data.depends_on?.length && !nessunaDip) {
       report.warn(file, `Vincolo tipo: un "html_mirror" dovrebbe avere esattamente un depends_on al .md sorgente`);
     }
     if (data.type === 'cross_cutting_doc' && !data.related_to?.length) {
       report.warn(file, `Vincolo tipo: un "cross_cutting_doc" dovrebbe avere almeno un related_to verso una capsule`);
+    }
     }
 
     // ── Livello 5: Vincoli di status ──
@@ -438,7 +459,11 @@ function validate(mdFiles, baseDir, profile = 'full') {
 
     // ── Livello 6: Freshness (stale alert) ──
     const doc = report.documents.find(d => d.id === id);
-    if (doc && doc.freshnessStatus === 'stale') {
+    if (doc && doc.backlog) {
+      const testo = descriviFerme(doc.backlog.r, doc.backlog.soglia);
+      if (testo) report.warn(file, `Backlog: ${testo}`);
+      if (!doc.backlog.r.sezione) report.warn(file, 'Backlog senza sezione «In corso»: la freschezza non si può misurare');
+    } else if (doc && doc.freshnessStatus === 'stale') {
       report.warn(file, `Documento stale: ${doc.stalenessDays} giorni (soglia: ${doc.threshold}d)`);
     }
   }

@@ -234,6 +234,20 @@ test('freshness (0.6-n): superseded/deprecated → retired; tipo senza default (
   assert(st({ ...vecchio, type: 'report', status: 'active' }) === 'fresh', 'report: never');
 });
 
+test('freshness (0.6-z6): paused non invecchia; backlog misurato sulle voci «In corso», non sulla data del file', () => {
+  const oggi = new Date('2026-10-16T12:00:00Z');
+  const vecchio = { last_updated: '2026-01-01' };
+  const st = (fm, corpo = null) => populateComputedFields(fm, 'sha256:x', oggi, corpo)._computed_status;
+  assert(st({ ...vecchio, type: 'reference', status: 'paused' }) === 'paused', 'paused');
+  const corpo = (d) => `# B\n\n## In corso\n| ID | Cosa | Aggiornato |\n|---|---|---|\n| B-001 | x | ${d} |\n`;
+  assert(st({ ...vecchio, type: 'backlog', status: 'active' }, corpo('2026-10-10')) === 'fresh', 'voce di 6 giorni: fresh, anche col file di gennaio');
+  assert(st({ ...vecchio, type: 'backlog', status: 'active' }, corpo('2026-09-20')) === 'stale', 'voce di 26 giorni: stale');
+  assert(populateComputedFields({ ...vecchio, type: 'backlog' }, 'x', oggi, corpo('2026-09-20'))._computed_staleness_days === 26, 'giorni della voce più ferma');
+  // date senza anno, come nei backlog pilota: «16/10» = oggi; «20/12» sarebbe nel futuro → l'anno prima
+  assert(st({ ...vecchio, type: 'backlog' }, corpo('16/10')) === 'fresh', '16/10 senza anno');
+  assert(st({ ...vecchio, type: 'backlog' }, corpo('20/12')) === 'stale', '20/12 senza anno: dicembre scorso');
+});
+
 const passed = results.filter((r) => r.pass).length;
 const failed = results.length - passed;
 console.log(`━`.repeat(60));

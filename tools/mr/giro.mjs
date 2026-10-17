@@ -49,6 +49,9 @@ import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MR_VERSION, refsOfDoc } from './mr.mjs';
 import { saluteDocs } from './lib/salute.mjs';
+import { readFrontmatter } from './lib/frontmatter.mjs';
+import { leggiBlob } from './lib/date.mjs';
+import { isGiroHistorical, isFixture, esclusoDaRegola } from './lib/vivi.mjs';
 import { toSegnalazioni } from './lib/segnalazione.mjs';
 import { RepoView, isSecretPath } from './lib/repo.mjs';
 import { checkDocs, loadIgnore, parseIgnore, IGNORE_FILE, codeExcludes } from './lib/claims.mjs';
@@ -77,46 +80,8 @@ const GIRO_DIR = join(MR_ROOT, 'report/giro');
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.venv', 'vendor', 'Pods', 'DerivedData']);
 const ESITI = ['confermata', 'scartata', 'non valutata'];
 
-// doc storici o di lavoro (decisione 1 della 0.6-g): fuori dal giro, non una riga informativa
-const HIST_TOKENS = new Set([
-  'piano', 'piani', 'plan', 'plans', 'planning', 'roadmap', 'roadmaps', 'proposta', 'proposte',
-  'proposal', 'proposals', 'ricerca', 'ricerche', 'research', 'spike', 'spikes', 'log', 'logs',
-  'changelog', 'report', 'reports', 'incidente', 'incidenti', 'incident', 'incidents', 'postmortem',
-  'archive', 'archivio', 'archived', 'archiviati', 'handoff', 'handoffs', 'hof', 'daily', 'diario',
-  'audit', 'release', 'releases', // 0.6-i: fotografie di un momento (giro 2: audit e note di release)
-  'delta', 'design', 'recon', 'ricognizione', // 0.6-j: confronti col legacy, design, ricognizioni (giro 3)
-  // fixture di test (aggiunta dell'agente: doc sbagliati apposta)
-  'fixtures', 'fixture',
-]);
-
-/** motivo di isGiroHistorical che indica una fixture di test (doc sbagliati apposta): fuori anche dalle ancore */
-export function isFixture(reason) {
-  return reason === 'fixture di test' || /^«fixtures?» nel path$/.test(reason || '');
-}
-
-/** il doc (path relativo al repo) è storico per il giro? ritorna il motivo o null */
-export function isGiroHistorical(rel) {
-  const low = rel.toLowerCase();
-  const segs = low.split('/');
-  const base = segs[segs.length - 1];
-  if (base.startsWith('hof-')) return 'hof-*';
-  if (low.includes('docs/superpowers/')) return 'docs/superpowers/';
-  if (segs.some((sg) => sg === '_out' || sg.startsWith('_output'))) return '_out/, _output*/ (generati)';
-  // cartelle o file datati (14-04-26/, emergenza-2026-08/, 2026-09-10_x.md): note del giorno
-  if (segs.some((sg) => /(^|[^\d])(\d{4}-\d{2}(-\d{2})?|\d{2}-\d{2}-\d{2,4})([^\d]|$)/.test(sg))) return 'datato';
-  if (segs.includes('test-files')) return 'fixture di test';
-  // pacchetti di modifica numerati (app-web/code/136_griglia_20_minuti/) e runbook di applicazione (0.6-j)
-  if (segs.slice(0, -1).some((sg) => /^\d{2,4}_[a-z0-9]/.test(sg))) return 'pacchetto di modifica';
-  if (/^runbook[_-]apply/.test(base)) return 'runbook di applicazione';
-  // note datate anche senza anno (24-07-pm.md, 0.6-j)
-  if (/^\d{2}-\d{2}([-_.]|$)/.test(base)) return 'datato';
-  // versione nel nome del file (rework-ui-0.7.0.md): nota di una release, storica
-  if (/(^|[^\d])\d+\.\d+\.\d+([^\d]|$)/.test(base)) return 'versione nel nome';
-  if (low.includes('lovable') && /(^|[\/_. -])prompts?([\/_. -]|$)/.test(low)) return 'prompt Lovable';
-  const tokens = segs.flatMap((sg) => sg.replace(/\.md$/, '').split(/[-_. ]+/)).filter(Boolean);
-  const hit = tokens.find((t) => HIST_TOKENS.has(t));
-  return hit ? `«${hit}» nel path` : null;
-}
+// doc storici per path e regole dell'allow-list: in lib/vivi.mjs (0.6-z4), condivisi con `mr vivi`
+export { isGiroHistorical, isFixture } from './lib/vivi.mjs';
 
 function parseArgs(argv) {
   const o = { indice: null, only: [], exclude: [], write: false, precisione: false, fetch: false, locale: false, files: [] };
@@ -288,12 +253,14 @@ export function openPrFiles(root) {
   const slug = m[1];
   let out;
   try {
-    out = execFileSync(process.env.MR_GH_BIN || 'gh', ['pr', 'list', '--repo', slug, '--state', 'open', '--json', 'number,files', '--limit', '100'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = execFileSync(process.env.MR_GH_BIN || 'gh', ['pr', 'list', '--repo', slug, '--state', 'open', '--json', 'number,files,headRefOid', '--limit', '100'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (err) {
     return { ok: false, slug, files, note: `gh non disponibile o errore (${String(err.message).split('\n')[0].slice(0, 80)})` };
   }
+  const heads = new Map(); // numero → commit di testa della PR (0.6-z4: frontmatter in PR)
   try {
     for (const pr of JSON.parse(out || '[]')) {
+      if (pr.headRefOid) heads.set(pr.number, pr.headRefOid);
       for (const f of pr.files || []) {
         if (!files.has(f.path)) files.set(f.path, []);
         files.get(f.path).push(pr.number);
@@ -302,7 +269,59 @@ export function openPrFiles(root) {
   } catch {
     return { ok: false, slug, files, note: 'risposta di gh non leggibile' };
   }
-  return { ok: true, slug, files };
+  return { ok: true, slug, files, heads };
+}
+
+/**
+ * doc vivi senza frontmatter su origin/<default> che lo hanno in una PR aperta (0.6-z4), senza
+ * checkout né fetch: il commit di testa della PR si legge dal repo locale se c'è (l'agente lavora
+ * in un worktree dello stesso repo), altrimenti con `gh pr diff` (una chiamata per PR), cercando un
+ * `+mr_version:` aggiunto in testa al file.
+ * @returns {Array<{doc: string, pr: number}>}
+ */
+export function frontmatterInPr(root, prs, senza) {
+  const out = [];
+  if (!prs?.ok || !senza.length) return out;
+  const diffs = new Map();
+  const diffDi = (n) => {
+    if (!diffs.has(n)) {
+      try {
+        diffs.set(n, execFileSync(process.env.MR_GH_BIN || 'gh', ['pr', 'diff', String(n), '--repo', prs.slug], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 }));
+      } catch {
+        diffs.set(n, '');
+      }
+    }
+    return diffs.get(n);
+  };
+  const daLeggere = senza.filter((d) => prs.files.has(d));
+  const locali = [];
+  for (const doc of daLeggere) {
+    for (const n of prs.files.get(doc)) {
+      const oid = prs.heads?.get(n);
+      if (oid) locali.push({ doc, n, ref: `${oid}:${doc}` });
+    }
+  }
+  const blob = leggiBlob(root, locali.map((x) => x.ref));
+  const trovati = new Set();
+  locali.forEach((x, i) => {
+    const fm = blob[i] === null ? null : readFrontmatter(blob[i]);
+    if (blob[i] !== null) x.letto = true;
+    if (fm && fm.id && !trovati.has(x.doc)) { trovati.add(x.doc); out.push({ doc: x.doc, pr: x.n }); }
+  });
+  for (const doc of daLeggere) {
+    if (trovati.has(doc)) continue;
+    for (const n of prs.files.get(doc)) {
+      if (locali.some((x) => x.doc === doc && x.n === n && x.letto)) continue;
+      const d = diffDi(n);
+      const i = d.indexOf(`diff --git a/${doc} b/${doc}\n`);
+      if (i < 0) continue;
+      const fine = d.indexOf('\ndiff --git ', i + 1);
+      const parte = d.slice(i, fine < 0 ? undefined : fine);
+      // primo hunk dall'inizio del file con l'apertura del frontmatter e mr_version aggiunti
+      if (/^@@ -[01](,\d+)? \+1(,\d+)? @@/m.test(parte) && /^\+---$/m.test(parte) && /^\+mr_version\s*:/m.test(parte)) { out.push({ doc, pr: n }); break; }
+    }
+  }
+  return out;
 }
 
 /** una segnalazione per blocco: {doc, affermazioni, severita, testo} */
@@ -472,7 +491,12 @@ function runGiro(o) {
           },
         });
         // salute dei doc: frontmatter MR dei doc vivi (e degli storici per path, solo id e problemi)
-        const sd = saluteDocs(docs.map((d) => ({ doc: d, text: view.readFile(d) })), today, ancoraOnly.map((d) => ({ doc: d, text: view.readFile(d) })));
+        // 0.6-z4: i doc esclusi da una regola doc:/storico: (repo o centrale) non sono vivi; gli storico:
+        // contano come storici (id e problemi), i doc: escono del tutto (descrivono un altro repo)
+        const regole = [...(view.hasFile(IGNORE_FILE) ? loadIgnore(view) : []), ...central];
+        const vivi = docs.filter((d) => !esclusoDaRegola(d, regole));
+        const storRegola = docs.filter((d) => esclusoDaRegola(d, regole) === 'regola storico:');
+        const sd = saluteDocs(vivi.map((d) => ({ doc: d, text: view.readFile(d) })), today, [...ancoraOnly, ...storRegola].map((d) => ({ doc: d, text: view.readFile(d) })));
         salute.push({ slug: w.slug, repo: repoName, ...sd });
         // ancore e code_refs dei doc che ne hanno, alla stessa versione letta (0.6-s)
         for (const d of [...docs, ...ancoraOnly]) {
@@ -497,6 +521,9 @@ function runGiro(o) {
       for (const a of out.appendix) appendix.push({ ...a, id: `${w.slug}/${repoName}/${a.doc}` });
       const prs = o.senzaPr ? null : openPrFiles(r.root);
       if (prs && !prs.ok) prNotes.set(`${w.slug}/${repoName}`, prs.note);
+      // frontmatter che sta in una PR aperta (0.6-z4): il giro legge origin/<default> e non lo vedrebbe
+      const sdRepo = salute.find((x) => x.slug === w.slug && x.repo === repoName);
+      if (sdRepo) sdRepo.inPr = frontmatterInPr(r.root, prs, sdRepo.senza);
       for (const a of pendingAncore) {
         const inPr = prs?.files.get(a.doc);
         if (inPr) ancoreInPr.push({ ...a, prs: inPr, slug: prs.slug });
@@ -526,7 +553,7 @@ function runGiro(o) {
   {
     const v = salute.reduce((a, x) => a + x.vivi, 0);
     const t = salute.reduce((a, x) => a + x.taggati, 0);
-    L.push(`Salute dei doc (conteggio a parte, sezione «Salute dei doc»): ${t} doc vivi su ${v} con frontmatter MR, in ${salute.filter((x) => x.taggati).length} repo su ${salute.length}; da aggiornare (review_needed): ${salute.reduce((a, x) => a + (x.daAggiornare || []).length, 0)}.`);
+    L.push(`Salute dei doc (conteggio a parte, sezione «Salute dei doc»): ${t} doc vivi su ${v} con frontmatter MR (più ${salute.reduce((a, x) => a + (x.inPr || []).length, 0)} in PR aperte), in ${salute.filter((x) => x.taggati).length} repo su ${salute.length}; da aggiornare (review_needed): ${salute.reduce((a, x) => a + (x.daAggiornare || []).length, 0)}.`);
   }
   L.push(`Regole (0.6-g, 0.6-i): versione GitHub (origin/<default>) di ogni repo; doc storici fuori dal giro (${[...historicalCount.values()].reduce((a, b) => a + b, 0)} doc tolti); repo del codice dalla mappa (mr.repos.yaml o per cartella); righe che raccontano la rimozione o il passato = storico, righe di esempio fuori; solo affermazioni path/command/env/endpoint/table/identifier con prova di deriva («causato da»: il nome c'era ed è sparito). Le altre ${appendix.length} sono in appendice, non conteggiate.`, '');
   if (excluded.length) L.push(`Esclusi: ${excluded.map(([s, m]) => `\`${s}\` (${m})`).join(', ')}.`, '');
@@ -603,11 +630,13 @@ export function sezioneSalute(salute, maxProblemi = 60) {
   const t = salute.reduce((a, x) => a + x.taggati, 0);
   const p = salute.reduce((a, x) => a + x.problemiTutti.length, 0);
   const da = salute.reduce((a, x) => a + (x.daAggiornare || []).length, 0);
-  L.push(`Doc vivi (non storici per il giro): ${v} · con frontmatter MR: ${t} · senza: ${v - t} · da aggiornare (review_needed): ${da} · problemi nei doc con frontmatter: ${p}.`, '');
+  const ip = salute.reduce((a, x) => a + (x.inPr || []).length, 0);
+  L.push(`Doc vivi (non storici per il giro): ${v} · con frontmatter MR: ${t} · in PR aperte: ${ip} · senza: ${v - t - ip} · da aggiornare (review_needed): ${da} · problemi nei doc con frontmatter: ${p}.`, '');
+  L.push('«In PR aperte»: doc senza frontmatter sul branch di default che lo hanno in una PR aperta (letta dal repo locale o con `gh pr diff`, senza checkout). Si contano a parte: diventano «con frontmatter» quando la PR è mergiata. «Sospesi»: doc con `status: paused` (progetto sospeso), con frontmatter ma mai vecchi né da aggiornare.', '');
   L.push('Non sono segnalazioni: dicono quanta documentazione dichiara cosa è e se è ancora valida. Il frontmatter si propone con la skill `mr-tag` (profilo light, matrix.md §1.8), doc per doc, dall\'agente del workspace. Doc vecchio: l\'agente del workspace lo rilegge; se è ancora vero `mr rivisto <doc> --write` (aggiorna solo `last_updated`), altrimenti lo corregge. Doc da aggiornare: valido, ma l\'agente del workspace ha scritto in \`review_needed\` cosa non è più vero; dopo la correzione \`mr rivisto <doc> --write\` toglie il campo.', '');
-  L.push('| workspace | repo | doc vivi | con frontmatter | senza | vecchi | da aggiornare | problemi |', '|---|---|---|---|---|---|---|---|');
+  L.push('| workspace | repo | doc vivi | con frontmatter | in PR aperte | senza | vecchi | da aggiornare | sospesi | problemi |', '|---|---|---|---|---|---|---|---|---|---|');
   const rows = [...salute].filter((x) => x.vivi || x.taggatiStorici || (x.daAggiornare || []).length).sort((a, b) => b.vivi - a.vivi || a.slug.localeCompare(b.slug));
-  for (const x of rows) L.push(`| ${x.slug} | ${cell(x.repo)} | ${x.vivi} | ${x.taggati}${x.taggatiStorici ? ` (+${x.taggatiStorici} storici)` : ''} | ${x.vivi - x.taggati} | ${x.vecchi} | ${(x.daAggiornare || []).length} | ${x.problemiTutti.length} |`);
+  for (const x of rows) L.push(`| ${x.slug} | ${cell(x.repo)} | ${x.vivi} | ${x.taggati}${x.taggatiStorici ? ` (+${x.taggatiStorici} storici)` : ''} | ${(x.inPr || []).length} | ${x.vivi - x.taggati - (x.inPr || []).length} | ${x.vecchi} | ${(x.daAggiornare || []).length} | ${x.sospesi || 0} | ${x.problemiTutti.length} |`);
   const daLista = rows.flatMap((x) => (x.daAggiornare || []).map((q) => `- ${cell(`${x.slug}/${x.repo}/${q.doc}`)}: ${cell(q.motivo)}`));
   if (daLista.length) L.push('', 'Da aggiornare (review_needed), per repo:', '', ...daLista);
   const tutti = rows.flatMap((x) => x.problemiTutti.map((q) => `- ${cell(`${x.slug}/${x.repo}/${q.doc}`)}: ${q.problema}`));

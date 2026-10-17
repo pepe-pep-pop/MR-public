@@ -141,6 +141,16 @@ test('motivi in appendice (0.6-j): storico, planned, negato, esempio — prima d
   assert(why[10] === 'nessuna prova che sia esistito' && causeAsked.length === 11, `tabella normale: si cerca la causa (${JSON.stringify(why)}, ${causeAsked.length})`);
 });
 
+test('«superato» nel titolo di sezione (0.6-z5): vale solo come «superato da …», non come «passato»', () => {
+  const fakeRepo = { rev: 'HEAD', git: () => { throw new Error('no'); }, grepMatches: () => [], listFiles: () => [], hasDir: () => false, root: '/nonexistent' };
+  const rec = (line, section) => ({ doc: 'a.md', line, section, kind: 'identifier', claim: 'nome_x', key: 'nome_x', status: 'not_found' });
+  const recs = [rec(1, '## Gate superati'), rec(2, '## Test superato il 12/10'), rec(3, '## Modulo superato dal nuovo flusso'), rec(4, '## Codice rimosso')];
+  const out = toSegnalazioni({ repo: 'r', tool: 'mr' }, recs, [], () => fakeRepo, { onlyCaused: true, lineText: () => 'Usa `nome_x`.', rawLine: () => 'Usa `nome_x`.', reposForDoc: () => [] });
+  const why = Object.fromEntries(out.appendix.map((a) => [a.line, a.reason]));
+  assert(why[1] === 'nessuna prova che sia esistito' && why[2] === 'nessuna prova che sia esistito', `«superati» = passati: si cerca la causa (${JSON.stringify(why)})`);
+  assert(/^storico: il titolo della sezione/.test(why[3]) && /^storico: il titolo della sezione/.test(why[4]), `«superato dal …» e «rimosso» restano storici (${JSON.stringify(why)})`);
+});
+
 test('parseIndice: attivi, archivio dalla riga **Archivio:** e dal gruppo', () => {
   const w = parseIndice(readFileSync(indice, 'utf-8'));
   const st = Object.fromEntries(w.map((x) => [x.slug, x.attivo ? 'attivo' : x.motivo]));

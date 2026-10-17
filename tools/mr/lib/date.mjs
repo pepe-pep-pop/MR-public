@@ -181,3 +181,100 @@ export function dateImport(d, commits, regole, text) {
   return { ...d, created, last_updated: last, import: imp, fonte };
 }
 
+
+// ── a lotti (0.6-z4): un solo git log per repo e un cat-file --batch per giro di controllo ──
+
+/**
+ * commit che toccano ciascun doc, dal più recente, con un solo `git log --name-status -M` sul repo
+ * (oggi un `git log --follow` per doc: 49 s su 611 doc). Il rename si segue come con --follow: dal
+ * commit del rename in giù il doc si cerca col nome vecchio; il commit che lo crea chiude la lista.
+ * @returns {Map<string, Array<{hash, date, subject, path}>>}
+ */
+export function commitsDiTutti(root, rev, rels) {
+  const out = execFileSync('git', ['-C', root, 'log', rev || 'HEAD', '-M', '--format=%x00%H%x09%as%x09%s', '--name-status'], { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 1024 });
+  const lists = new Map(rels.map((r) => [r, []]));
+  const tracked = new Map(rels.map((r) => [r, r])); // path a quel punto della storia → doc
+  for (const b of out.split('\0')) {
+    if (!b.trim()) continue;
+    const [head, ...lines] = b.split('\n');
+    const [hash, date, ...s] = head.split('\t');
+    const commit = { hash, date, subject: s.join('\t') };
+    for (const l of lines) {
+      if (!l) continue;
+      const [st, a, bb] = l.split('\t');
+      if (st.startsWith('R') && bb !== undefined) {
+        const doc = tracked.get(bb);
+        if (doc === undefined) continue;
+        lists.get(doc).push({ ...commit, path: bb });
+        tracked.delete(bb);
+        tracked.set(a, doc);
+      } else {
+        const doc = tracked.get(a);
+        if (doc === undefined) continue;
+        lists.get(doc).push({ ...commit, path: a });
+        if (st === 'A') tracked.delete(a);
+      }
+    }
+    if (!tracked.size) break;
+  }
+  return lists;
+}
+
+/** contenuto di molti `<rev>:<path>` con un solo `git cat-file --batch`: null se l'oggetto non c'è */
+export function leggiBlob(root, richieste) {
+  if (!richieste.length) return [];
+  const raw = execFileSync('git', ['-C', root, 'cat-file', '--batch'], { input: richieste.map((r) => r.replace(/\n/g, '')).join('\n') + '\n', maxBuffer: 1024 * 1024 * 1024 });
+  const out = [];
+  let i = 0;
+  while (out.length < richieste.length && i < raw.length) {
+    const nl = raw.indexOf(10, i);
+    const header = raw.subarray(i, nl).toString('utf-8');
+    i = nl + 1;
+    if (/ missing$| ambiguous$/.test(header)) { out.push(null); continue; }
+    const size = Number(header.split(' ')[2]);
+    out.push(raw.subarray(i, i + size).toString('utf-8'));
+    i += size + 1;
+  }
+  return out;
+}
+
+/**
+ * dateDaCommit per molti doc: stessi risultati, ma il controllo «testo invariato» si fa a giri, con
+ * un solo cat-file per giro su tutti i doc che ne hanno bisogno.
+ * @param {Map<string, Array>} liste - da commitsDiTutti
+ * @returns {Map<string, ReturnType<typeof dateDaCommit>>}
+ */
+export function dateDiTutti(root, liste, regole) {
+  const stato = new Map();
+  for (const [doc, commits] of liste) stato.set(doc, { commits, i: 0, saltati: [], fatto: !commits.length });
+  for (;;) {
+    const attesa = [];
+    for (const [doc, st] of stato) {
+      if (st.fatto) continue;
+      const { commits } = st;
+      // i commit di redazione si saltano senza leggere nulla; il commit di creazione conta sempre
+      while (st.i < commits.length - 1 && diRedazione(commits[st.i], regole)) { st.saltati.push({ ...commits[st.i], motivo: 'redazione' }); st.i++; }
+      if (st.i >= commits.length - 1) { st.fatto = true; continue; }
+      attesa.push(doc);
+    }
+    if (!attesa.length) break;
+    const req = attesa.flatMap((doc) => {
+      const { commits, i } = stato.get(doc);
+      return [`${commits[i].hash}:${commits[i].path}`, `${commits[i].hash}^:${commits[i + 1].path}`];
+    });
+    const blob = leggiBlob(root, req);
+    attesa.forEach((doc, k) => {
+      const st = stato.get(doc);
+      const a = blob[2 * k];
+      const b = blob[2 * k + 1];
+      if (a !== null && b !== null && corpo(a) === corpo(b)) { st.saltati.push({ ...st.commits[st.i], motivo: 'testo invariato' }); st.i++; } else st.fatto = true;
+    });
+  }
+  const out = new Map();
+  for (const [doc, st] of stato) {
+    const { commits, saltati } = st;
+    if (!commits.length) { out.set(doc, { created: null, ultimo: null, last_updated: null, saltati: [], tutti_saltati: false }); continue; }
+    out.set(doc, { created: commits[commits.length - 1].date, ultimo: commits[0].date, last_updated: commits[st.i].date, saltati, tutti_saltati: saltati.length === commits.length - 1 && saltati.length > 0 });
+  }
+  return out;
+}

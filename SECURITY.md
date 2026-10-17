@@ -20,7 +20,8 @@ chi l'ha fatta, se lo desidera.
   lo controlla in CI.
 - Nessuna chiamata a API LLM o a servizi esterni. `scan --remote` legge soltanto, con `gh api`.
 - Nessun server in ascolto.
-- I file `.env*`, `*.pem`, `*.key` e quelli con `SECRET` o `SEGRETI` nel nome non vengono letti, e i
-  valori che sembrano segreti vengono oscurati nei diff mostrati da `verify`.
+- I file `.env*`, `*.pem`, `*.key` e quelli con `SECRET` o `SEGRETI` nel nome non vengono letti (tranne
+  i doc markdown, che possono parlare di segreti senza contenerli), e i valori che sembrano segreti
+  vengono oscurati nei diff mostrati da `verify`.
 
 Una violazione di uno di questi punti è una vulnerabilità.

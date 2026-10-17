@@ -54,7 +54,7 @@ La CI (`.github/workflows/test.yml`) esegue gli stessi comandi.
 - **Sicurezza:**
   - nessuna API LLM esterna, nessuna chiave nei file, nessun server in ascolto;
   - non leggere `.env*` (tranne `.env.example`, solo per i nomi delle variabili), `*.pem`, `*.key`,
-    né file con `SECRET` o `SEGRETI` nel nome.
+    né file con `SECRET` o `SEGRETI` nel nome (i doc `.md` sì: possono parlare di segreti).
 - **Dati:** test, fixture ed esempi senza dati personali né segreti; nomi finti (`acme/app-web`,
   `nome.cognome@example.com`).
 - **Git:**

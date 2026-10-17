@@ -13,6 +13,10 @@
  *                  (env, identifier, symbol: parola; table: ultima parte nei file di schema;
  *                  endpoint: prefisso fisso come stringa; command: script nei package.json)
  * Si guardano al massimo MAX_CANDIDATES commit per claim. Nessun contenuto esce: solo hash e data.
+ *
+ * Tempi (0.6-z4): nel giro questa prova è l'80% del tempo (239 s su 338). Due correzioni:
+ *   - `git log` si ferma alle prime MAX_CANDIDATES candidate (--max-count): le altre non si guardano;
+ *   - la prova si ricorda per repo, commit, tipo e nome: lo stesso nome citato da più doc si prova una volta.
  */
 
 import { RepoView } from './repo.mjs';
@@ -24,7 +28,7 @@ const NOT_DOCS = ['.', ':(exclude,glob)**/*.md', ':(exclude,glob)**/*.mdx'];
 
 function log(repo, args) {
   try {
-    return repo.git(['log', '--format=%h|%as', ...args]).split('\n').filter(Boolean).map((l) => {
+    return repo.git(['log', `--max-count=${MAX_CANDIDATES}`, '--format=%h|%as', ...args]).split('\n').filter(Boolean).map((l) => {
       const [hash, date] = l.split('|');
       return { hash, date };
     });
@@ -88,7 +92,15 @@ function firstRemoval(repo, candidates, test) {
  * @param {{kind: string, key: string, claim?: string}} r - record di un claim not_found
  * @returns {{hash: string, date: string}|null}
  */
+const CACHE = new Map();
+
 export function verifiedCause(repo, r) {
+  const k = [repo.root, repo.rev || 'HEAD', (repo.codeExcludes || []).map(String).join(','), r.kind, r.key, r.kind === 'command' ? r.claim : ''].join('\0');
+  if (!CACHE.has(k)) CACHE.set(k, verifiedCauseSenzaCache(repo, r));
+  return CACHE.get(k);
+}
+
+function verifiedCauseSenzaCache(repo, r) {
   const head = repo.rev || 'HEAD';
   if (r.kind === 'path') {
     const clean = r.key.replace(/^\.\//, '').replace(/\/+$/, '');

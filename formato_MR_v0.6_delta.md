@@ -131,3 +131,24 @@ sparire il doc in silenzio:
 
 Regola di scrittura: `title` sempre tra virgolette doppie.
 
+## 9. Tipo `backlog` (0.6-z6)
+
+Il backlog unico di un repo (schema in `_arch/tool/piattaforme-interne/proposta-1-report-backlog.md`
+§4) si aggiorna riga per riga. Con `type: roadmap` portava due warning fissi: il `depends_on` verso
+spec o ppd, e la soglia di 30 giorni sulla data del file.
+- **Nessuna relazione obbligatoria.**
+- **Freschezza per voce:** il doc è «vecchio» se una riga della sezione «In corso» ha la colonna
+  «Aggiornato» più vecchia di 14 giorni. Date `2026-10-16` o `16/10/2026`. `staleness_threshold: Nd`
+  cambia la soglia, `never` la spegne. Le altre sezioni non contano.
+- **Stessa regola** in `mr-validate` (warning con gli ID fermi), in `mr-scanner` (`_computed_status`)
+  e nella «Salute dei doc» del giro (problema con gli ID e l'azione).
+
+## 10. Vincoli di tipo sui doc chiusi e `depends_on: []` (0.6-z6)
+
+- Le relazioni «tipiche» di §1.1 di `matrix.md` (un `report` o un `roadmap` con un `depends_on`, una
+  `spec` con un `required_by`…) **non si controllano sui doc chiusi** (`deprecated`, `superseded`).
+- **`depends_on: []` esplicito** vuol dire «verificato: nessuna dipendenza da dichiarare» e spegne
+  i vincoli sul `depends_on`. Serve quando il bersaglio plausibile non esiste o non si vuole
+  taggare. Se il bersaglio è un doc storico, la strada preferita resta taggarlo
+  (`deprecated`/`superseded`) e puntarlo con `strength: weak`.
+

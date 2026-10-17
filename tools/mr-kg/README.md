@@ -1,3 +1,14 @@
+---
+mr_version: '0.6'
+id: mr/tools-mr-kg-readme
+title: "mr-kg — Knowledge Graph MR"
+type: reference
+owner: rnd
+status: active
+created: '2026-06-25'
+last_updated: '2026-10-03'
+---
+
 # mr-kg — Knowledge Graph MR (v0.5.1)
 
 Strumenti Python che trasformano i frontmatter MR in un grafo RDF (Turtle) e lo interrogano

@@ -166,6 +166,7 @@ test('import senza data nel testo (o data non valida): sconosciuta, e il frontma
   const md = run(imp, 'date', 'docs').out;
   assert(/\| docs\/e\.md \| o\/e \| \? \(sconosciuta\) \| 2026-09-03 \| \? \(sconosciuta\) \| import, nessuna data nel testo \(import [0-9a-f]{7}\) \| 2026-09-03 \|/.test(md), md);
   assert(/frontmatter con last_updated diverso: 0 · nati in un import: 7 \(date dal testo: 3, sconosciute: 4\)\./.test(md), md);
+  assert(/Date sconosciute \(4\): doc nati nell'import senza una data nel testo\. La data la sceglie chi tagga/.test(md), 'manca l\'indicazione su cosa fare (0.6-z4)');
 });
 
 test('senza la riga import: le date dell\'import restano quelle di git; «import:» con uno sha non valido → 2', () => {
@@ -176,6 +177,52 @@ test('senza la riga import: le date dell\'import restano quelle di git; «import
   const r = run(imp, 'date', 'docs');
   assert(r.code === 2 && /«import:» vuole uno sha/.test(r.err), r.err);
   rmSync(imp, { recursive: true, force: true });
+});
+
+// 0.6-z4: date a lotti (un git log per repo) contro il calcolo per singolo doc (git log --follow)
+const lot = realpathSync(mkdtempSync(join(tmpdir(), 'mr-date-lotti-')));
+execFileSync('git', ['init', '-q', lot]);
+const commitLot = (date, msg) => {
+  execFileSync('git', ['-C', lot, 'add', '-A']);
+  execFileSync('git', ['-C', lot, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', msg], { env: { ...process.env, GIT_AUTHOR_DATE: `${date}T12:00:00`, GIT_COMMITTER_DATE: `${date}T12:00:00` } });
+};
+const LUNGO = '# Report\n\n' + 'Una riga di testo abbastanza lunga perché git riconosca la somiglianza.\n'.repeat(10);
+write(lot, 'docs/r1.md', LUNGO);
+write(lot, 'docs/x.md', '# X\n\nPrima versione.\n');
+write(lot, 'docs/m.md', LUNGO.replace('# Report', '# Mosso'));
+write(lot, 'docs/u.md', '# U\n');
+commitLot('2026-03-01', 'docs: primi');
+write(lot, 'docs/r2.md', LUNGO + 'Report nuovo, copiato dal primo che resta.\n');
+rmSync(join(lot, 'docs/x.md'));
+renameSync(join(lot, 'docs/m.md'), join(lot, 'docs/archivio-m.md'));
+commitLot('2026-04-01', 'docs: copia, cancellazione, spostamento');
+write(lot, 'docs/x.md', '# X\n\nRicreato da zero, è un altro doc.\n');
+write(lot, 'docs/u.md', '# U\n\nAggiornato.\n');
+commitLot('2026-05-01', 'docs: x ricreato, u aggiornato');
+const lotti = JSON.parse(run(lot, 'date', 'docs', '--format', 'json').out);
+
+test('a lotti (0.6-z4): una copia di un doc che resta non eredita la sua data; un doc ricreato nasce di nuovo', () => {
+  const r2 = by(lotti, 'docs/r2.md');
+  assert(r2.created === '2026-04-01', `copia: created del doc copiato invece del suo: ${JSON.stringify(r2)}`);
+  const x = by(lotti, 'docs/x.md');
+  assert(x.created === '2026-05-01' && x.last_updated === '2026-05-01', `ricreato: ${JSON.stringify(x)}`);
+});
+
+test('a lotti: rename, aggiornamenti e frontmatter danno le stesse date del calcolo per singolo doc', () => {
+  for (const doc of ['docs/archivio-m.md', 'docs/u.md', 'docs/r1.md']) {
+    const uno = JSON.parse(run(lot, 'date', doc, '--format', 'json').out).items[0];
+    const l = by(lotti, doc);
+    assert(uno.created === l.created && uno.last_updated === l.last_updated && JSON.stringify(uno.saltati) === JSON.stringify(l.saltati), `${doc}: per doc ${JSON.stringify(uno)} · a lotti ${JSON.stringify(l)}`);
+  }
+  assert(by(lotti, 'docs/archivio-m.md').created === '2026-03-01', 'il rename si segue');
+  // e sul repo della prima parte del test (redazioni, frontmatter, rename, import): a lotti = per doc
+  write(root, 'mr.redazioni', `${red.slice(0, 8)}\nmessaggio: redazione residui\n`); // il test dei rifiuti l'aveva rotto apposta
+  for (const doc of ['docs/a.md', 'docs/b.md', 'docs/d.md']) {
+    const uno = JSON.parse(run(root, 'date', doc, '--format', 'json').out).items[0];
+    const l = by(date(), doc);
+    assert(uno.last_updated === l.last_updated && uno.created === l.created, `${doc}: ${JSON.stringify(uno)} ≠ ${JSON.stringify(l)}`);
+  }
+  rmSync(lot, { recursive: true, force: true });
 });
 
 test('funzioni pure: parseRedazioni, corpo, dateDaCommit', () => {

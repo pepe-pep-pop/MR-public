@@ -87,7 +87,7 @@ external_dependencies:
 
 ## 1. Schema
 
-Definisce i tipi MR validi, i loro default e i loro campi obbligatori per tipo. Tutti gli `mr_version: "0.3"` e `"0.4"` usano questo schema (i 9 tipi v0.3 + 5 brain-extended v0.4).
+Definisce i tipi MR validi, i loro default e i loro campi obbligatori per tipo. Tutti gli `mr_version` usano questo schema: i 9 tipi v0.3, i 5 brain-extended v0.4 e i 2 della v0.5 (`handoff`, `runbook`).
 
 ### 1.1 Tipi MR validi e default per tipo
 
@@ -102,11 +102,18 @@ Definisce i tipi MR validi, i loro default e i loro campi obbligatori per tipo. 
 | `report` | MR-extended | `never` | — | almeno un `depends_on` (verso `roadmap`/`spec`/`log`) |
 | `log` | MR-extended | `never` | — | nessuna obbligatoria (i log sono autonomi) |
 | `ppd` | MR-extended | `never` | — | nessuna obbligatoria (è un documento fondazionale) |
+| `handoff` | MR-extended (v0.5) | `90d` (nessun default dedicato: vale quello generico) | — | catena: il più recente `active`, gli altri `superseded` con `superseded_by` verso il successivo |
+| `runbook` | MR-extended (v0.5) | `90d` (nessun default dedicato: vale quello generico) | — | nessuna obbligatoria |
+| `backlog` | MR-extended (0.6-z6) | `14d` **per voce**: conta la colonna «Aggiornato» delle righe della sezione «In corso», non la data del file | — | nessuna obbligatoria |
 | `capsule` | brain-extended (v0.4) | `30d` | — | almeno un `required_by` (la capsule serve a una `portfolio_view`) |
 | `cross_cutting_doc` | brain-extended (v0.4) | `60d` | — | almeno un `related_to` verso una `capsule` |
 | `portfolio_view` | brain-extended (v0.4) | `14d` | — | almeno un `depends_on` verso una `capsule` (+ `propagate_staleness_to` verso il mirror se esiste) |
 | `html_mirror` | brain-extended (v0.4) | `30d` | — | esattamente un `depends_on` verso il `.md` sorgente |
 | `index` | brain-extended (v0.4) | `60d` | — | nessuna obbligatoria (punto di ingresso per umani/LLM) |
+
+**Vincoli di tipo (colonna «Relazioni tipiche»), dalla 0.6-z6:** non scattano sui doc chiusi
+(`deprecated`, `superseded`). Un `depends_on: []` scritto esplicitamente vuol dire «verificato:
+nessuna dipendenza da dichiarare» e spegne i vincoli sul `depends_on`.
 
 **Semantica dei 5 tipi v0.4** (per dettagli e esempi: `formato_MR_v0.4_delta.md` + field test in `_www/brain/_mr/v0.4_proposal.md`):
 - `capsule`: riassunto sintetico (<200 righe) di un singolo progetto, derivato da un `project_brief.md` esterno (vedi §1.7 `external_dependencies`).
@@ -121,7 +128,7 @@ Definisce i tipi MR validi, i loro default e i loro campi obbligatori per tipo. 
 mr_version: "0.4"           # const "0.2" | "0.3" | "0.4" — accettati tutti
 id: namespace/slug          # pattern: ^[a-z0-9][a-z0-9/_-]*[a-z0-9]$
 title: "..."                # 1-200 char
-type: <uno dei 14 sopra>    # enum (9 v0.3 + 5 brain-extended v0.4)
+type: <uno dei 17 sopra>    # enum (9 v0.3 + 5 brain-extended v0.4 + 2 v0.5 + backlog)
 owner: <nome o team>        # 1+ char
 created: YYYY-MM-DD         # date format
 ```
@@ -246,11 +253,13 @@ Scanner: `mr-scanner --write --profile light` non tocca i doc; scrive solo il re
 
 Vocabolari controllati. Tutti i campi qui hanno valori finiti — qualsiasi altro valore è errore di schema.
 
-### 2.1 `type` (14 valori — 9 v0.3 + 5 brain-extended v0.4)
+### 2.1 `type` (17 valori — 9 v0.3 + 5 brain-extended v0.4 + 2 v0.5 + backlog)
 
 Vedi §1.1 per la tabella completa con default. In sintesi:
 - **9 v0.3**: `guide`, `how-to`, `reference`, `explanation` (i 4 di Diátaxis) + `spec`, `roadmap`, `report`, `log`, `ppd` (estensioni MR per R&D)
 - **5 v0.4 brain-extended**: `capsule`, `cross_cutting_doc`, `portfolio_view`, `html_mirror`, `index` (tipi emersi dal field test su `_www/brain/` 2026-04-26)
+- **2 v0.5**: `handoff` (passaggio di consegne tra sessioni, in catena) e `runbook` (procedura operativa). Erano nello schema dalla v0.5 ma mancavano da questa tabella fino alla 0.6-z5
+- **`backlog`** (0.6-z6): il backlog unico di un repo (`doc/backlog.md`, sezioni In corso, Prossimi, In attesa, Idee, Fatto). È «vecchio» quando una voce «In corso» ha «Aggiornato» più vecchio di 14 giorni (o di `staleness_threshold`); la data del file non conta
 
 **Quando NON sai quale tipo usare**:
 - Per documentazione tecnica generica: scegli `explanation` (più tollerante, no relazioni obbligatorie, threshold lungo) come fallback temporaneo. Rivisita più tardi.
@@ -376,6 +385,8 @@ Quando un documento A con `propagate_staleness_to: [{id: B, ...}]` viene modific
 | `mr/formato-v051-delta` | `spec` | `formato_MR_v0.5.1_delta.md` | `active` | `2026-10-03` | `2026-10-03` |
 | `mr/formato-v06-delta` | `spec` | `formato_MR_v0.6_delta.md` | `active` | `2026-10-03` | `2026-10-13` |
 | `mr/matrix` | `spec` | `matrix.md` | `active` | `2026-04-26` | `2026-10-03` |
+| `mr/tools-mr-kg-readme` | `reference` | `tools/mr-kg/README.md` | `active` | `2026-06-25` | `2026-10-03` |
+| `mr/tools-mr-readme` | `reference` | `tools/mr/README.md` | `active` | `2026-10-03` | `2026-10-16` |
 
 <!-- MR-REGISTRY-END -->
 

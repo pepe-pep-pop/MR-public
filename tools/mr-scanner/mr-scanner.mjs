@@ -49,6 +49,7 @@ import { fileURLToPath } from 'node:url';
 import matter from 'gray-matter';
 import { findRepoRoot, listMarkdownFiles, collectMarkdownArgs } from '../lib/discover.mjs';
 import { bloccoMr, testoIlleggibile } from '../lib/illeggibile.mjs';
+import { vociFerme, sogliaBacklog } from '../lib/backlog.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -687,7 +688,7 @@ function buildPropagationPatches(propagationEvents, scannedFiles) {
  * @param {Date} today - data corrente (default: new Date())
  * @returns {object} oggetto coi campi _* calcolati
  */
-export function populateComputedFields(frontmatter, contentHashShort, today = new Date()) {
+export function populateComputedFields(frontmatter, contentHashShort, today = new Date(), corpo = null) {
   const todayStr = today.toISOString().split('T')[0];
 
   // last_updated come stringa o oggetto Date (gray-matter parsa le date YAML come Date)
@@ -721,6 +722,15 @@ export function populateComputedFields(frontmatter, contentHashShort, today = ne
   let computedStatus = 'fresh';
   if (frontmatter?.status === 'superseded' || frontmatter?.status === 'deprecated') {
     computedStatus = 'retired';
+  } else if (frontmatter?.status === 'paused') {
+    // progetto sospeso (0.6-z5, come mr-validate): non invecchia
+    computedStatus = 'paused';
+  } else if (frontmatter?.type === 'backlog' && corpo !== null) {
+    // backlog (0.6-z6, come mr-validate): stale se una voce «In corso» è ferma oltre la soglia
+    const soglia = sogliaBacklog(explicitThreshold);
+    const r = soglia === Infinity ? { ferme: [] } : vociFerme(corpo, today, soglia);
+    computedStatus = r.ferme.length ? 'stale' : 'fresh';
+    computedStalenessDays = r.ferme.reduce((m, f) => Math.max(m, f.giorni), 0);
   } else if (threshold !== 'never') {
     const thresholdDays = parseInt(threshold.replace('d', ''), 10);
     if (computedStalenessDays > thresholdDays) {
@@ -838,7 +848,7 @@ Exit code: 0 ok, 1 nessun file trovato o errore di scrittura, 2 uso scorretto.
 
   for (const filePath of files) {
     try {
-      const { hashShort, frontmatter } = await computeContentHash(filePath);
+      const { hashShort, frontmatter, body } = await computeContentHash(filePath);
 
       if (!frontmatter || !frontmatter.mr_version) {
         withoutMrHeader++;
@@ -846,7 +856,7 @@ Exit code: 0 ok, 1 nessun file trovato o errore di scrittura, 2 uso scorretto.
       }
       withMrHeader++;
 
-      const computed = populateComputedFields(frontmatter, hashShort, today);
+      const computed = populateComputedFields(frontmatter, hashShort, today, body);
       const relPath = relative(process.cwd(), filePath);
 
       scannedFiles.push({

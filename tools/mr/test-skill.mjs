@@ -68,6 +68,11 @@ test('title tra virgolette (0.6-z3): mr-tag le mette sempre', () => {
   assert(/title: "<dal titolo # del doc>"/.test(t) && /`title` sempre tra virgolette doppie/.test(t), 'mr-tag non mette il title tra virgolette');
 });
 
+test('modello del frontmatter (0.6-z5): mr-tag propone mr_version 0.6', () => {
+  const t = read('mr-tag');
+  assert(/mr_version: '0\.6'/.test(t) && !/mr_version: '0\.5'/.test(t), 'mr-tag propone ancora una versione vecchia');
+});
+
 const ok = results.filter(Boolean).length;
 console.log(`\nRisultato: ${ok}/${results.length} ${ok === results.length ? 'PASS' : 'FAIL'}`);
 process.exitCode = ok === results.length ? 0 : 1;

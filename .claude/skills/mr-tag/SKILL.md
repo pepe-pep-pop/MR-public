@@ -34,6 +34,12 @@ nessuno script con LLM dentro.
      sì, aggiungi le chiavi MR **senza toccare le sue**: nel profilo light ogni chiave non MR è un
      warning «chiave di un altro strumento», non un errore (dalla 0.6-z1).
 
+2-bis. **Quali doc taggare:** `node tools/mr/mr.mjs vivi <repo> --senza-frontmatter` elenca i doc vivi
+   senza frontmatter, gli stessi che il giro conta nella «Salute dei doc». Restano fuori gli storici
+   per path (`hof-*`, piani, report, cartelle datate), le cartelle nascoste e i doc esclusi da
+   `codice:`, `doc:` o `storico:` nell'allow-list. Con l'allow-list centrale del giro:
+   `--ignore-dir <dir> --workspace <slug>`.
+
 3. **Ricava le date da git, non a occhio:** `node tools/mr/mr.mjs date <file|cartella>` (sola
    lettura) dà `created` e `last_updated` per ogni doc.
    - `created` è il commit che ha aggiunto il file, seguendo i rename.
@@ -55,12 +61,14 @@ nessuno script con LLM dentro.
    - `last_updated` è l'ultima modifica, non l'ultima lettura: un doc appena taggato può risultare
      «vecchio» nel giro; se lo hai riletto ed è vero, `mr rivisto <file> --write`.
    - Fuori da git, o file mai committato: data odierna, e dillo nel diff.
+   - **Doc copiati da un altro repo** (accorpamento): se puoi, tagga nel repo d'origine prima della
+     copia, perché lì `mr date` legge la storia vera; poi `import: <sha>` per il commit di copia.
 
 4. **Proponi il frontmatter** (profilo light):
 
    ```yaml
    ---
-   mr_version: '0.5'
+   mr_version: '0.6'
    id: <namespace>/<slug>        # ^[a-z0-9][a-z0-9/_-]*[a-z0-9]$, max 80, niente punti
    title: "<dal titolo # del doc>"   # SEMPRE tra virgolette doppie
    type: <uno dei tipi di matrix.md §1.1>
@@ -81,6 +89,9 @@ nessuno script con LLM dentro.
      punti (`Runbook — Bivio pool quiz: opzione A`) senza virgolette rompe il frontmatter, e il doc
      sparisce da validatore, scanner e giro (caso portale-b, 0.6-z3). Le virgolette doppie dentro
      il titolo si scrivono `\"`. Vale anche per `review_needed` e per ogni valore con `: ` o `#`.
+   - **Backlog** (il file unico `doc/backlog.md` con le sezioni In corso, Prossimi, In attesa, Idee,
+     Fatto): `type: backlog`, nessun `depends_on` obbligatorio. Invecchia per voce: conta la colonna
+     «Aggiornato» delle righe «In corso» (14 giorni), non la data del file.
    - L'`id` non deve collidere con il registry. Se collide, proponi una variante.
    - **Slug dal path, non solo dal nome del file**, quando il nome si ripete. In `_arch` ci sono
      più di 20 `README.md`: `arch/readme` per la radice, `arch/segnalazioni/readme`,
@@ -95,6 +106,12 @@ nessuno script con LLM dentro.
    - Lo stato di un doc lo decide chi lo possiede: per gli `hof` e per le roadmap chiuse
      proponi, e fai confermare.
    - `depends_on` verso un id che non esiste: non inventarlo; segnala il riferimento e chiedi.
+   - **Vincoli di tipo** («un roadmap/report dovrebbe avere un depends_on»), dalla 0.6-z6:
+     - su un doc chiuso (`deprecated`, `superseded`) non scattano;
+     - se il bersaglio giusto è un doc storico per il giro (un piano, un'analisi chiusa), taggalo
+       anche lui (`status: deprecated` o `superseded`) e puntalo con `strength: weak`;
+     - se una dipendenza da dichiarare non c'è proprio, scrivi `depends_on: []`: vuol dire
+       «verificato, nessuna dipendenza» e spegne il vincolo. Non usarlo per saltare la verifica.
    - `propagate_staleness_to` solo se l'utente lo indica o il doc lo dice in modo esplicito
      ("se cambia questo, aggiornare quello").
 
