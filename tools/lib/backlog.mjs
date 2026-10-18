@@ -51,10 +51,10 @@ const celle = (riga) => riga.trim().replace(/^\||\|$/g, '').split('|').map((c) =
  * voci della sezione «In corso» ferme da più di `soglia` giorni, e quelle senza una data leggibile
  * @param {string} testo - il doc (frontmatter compreso)
  * @param {string|Date} oggi
- * @returns {{ voci: number, ferme: Array<{id: string, giorni: number}>, senzaData: string[], sezione: boolean }}
+ * @returns {{ voci: number, ferme: Array<{id: string, giorni: number}>, senzaData: string[], sezione: boolean, giorniVoci: number[] }}
  */
 export function vociFerme(testo, oggi, soglia = SOGLIA_BACKLOG) {
-  const out = { voci: 0, ferme: [], senzaData: [], sezione: false };
+  const out = { voci: 0, ferme: [], senzaData: [], sezione: false, giorniVoci: [] };
   const righe = testo.replace(/\r\n?/g, '\n').split('\n');
   const t0 = new Date(oggi).getTime();
   let dentro = false;
@@ -79,6 +79,7 @@ export function vociFerme(testo, oggi, soglia = SOGLIA_BACKLOG) {
     const dt = iAgg >= 0 ? data(c[iAgg], oggi) : null;
     if (!dt) { out.senzaData.push(id); continue; }
     const giorni = Math.floor((t0 - dt.getTime()) / 86400000);
+    out.giorniVoci.push(giorni);
     if (giorni > soglia) out.ferme.push({ id, giorni });
   }
   return out;

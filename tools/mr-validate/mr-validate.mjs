@@ -34,13 +34,14 @@
  *     è calcolato, quindi è simmetrico per costruzione
  */
 
-import { readFileSync } from 'node:fs';
-import { resolve, relative } from 'node:path';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { resolve, relative, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import matter from 'gray-matter';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
-import { collectMarkdownArgs } from '../lib/discover.mjs';
+import { collectMarkdownArgs, findRepoRoot } from '../lib/discover.mjs';
+import { shaNonRisolti } from '../lib/redazioni.mjs';
 import { bloccoMr, testoIlleggibile } from '../lib/illeggibile.mjs';
 import { vociFerme, sogliaBacklog, descriviFerme } from '../lib/backlog.mjs';
 
@@ -192,8 +193,9 @@ class ValidationReport {
 
 // ── Validazione ──
 
-function validate(mdFiles, baseDir, profile = 'full') {
+function validate(mdFiles, baseDir, profile = 'full', erroriExtra = []) {
   const report = new ValidationReport();
+  for (const e of erroriExtra) report.error(e.file, e.msg);
   const now = new Date();
 
   // 1. Carica schema
@@ -321,11 +323,14 @@ function validate(mdFiles, baseDir, profile = 'full') {
     const hash = computeContentHash(parsed.content);
     report.log(rel, `_content_hash calcolato: ${hash}`);
 
+    // backlog (0.6-z7): nella tabella FRESHNESS giorni e soglia sono quelli delle voci «In corso»
+    // (la voce più ferma, soglia del backlog), non l'età del file con la soglia generica di 90d
+    const giorniTabella = backlogInfo ? Math.max(0, ...backlogInfo.r.giorniVoci) : stalenessDays;
     report.documents.push({
       id: id || '(no id)',
       type: data.type || '?',
-      stalenessDays,
-      threshold,
+      stalenessDays: giorniTabella,
+      threshold: data.type === 'backlog' ? sogliaBacklog(data.staleness_threshold) : threshold,
       freshnessStatus,
       file: rel,
       ...(backlogInfo ? { backlog: backlogInfo } : {}),
@@ -527,5 +532,19 @@ console.log(`
 console.log(`  Profilo: ${profile}`);
 console.log(`  File .md raccolti: ${allFiles.length}`);
 
-const exitCode = validate(allFiles, baseDir, profile);
+// 0.6-z8: gli sha di mr.redazioni dei repo validati devono risolversi (storia riscritta → errore)
+const erroriRedazioni = [];
+const radici = new Set(targets.map((t) => {
+  const abs = resolve(t);
+  if (!existsSync(abs)) return null;
+  return findRepoRoot(statSync(abs).isDirectory() ? abs : dirname(abs));
+}).filter(Boolean));
+for (const root of radici) {
+  const f = join(root, 'mr.redazioni');
+  if (!existsSync(f)) continue;
+  const nome = relative(baseDir, f) || 'mr.redazioni';
+  for (const msg of shaNonRisolti(root, readFileSync(f, 'utf-8'), nome)) erroriRedazioni.push({ file: nome, msg: msg.replace(`${nome}, `, '') });
+}
+
+const exitCode = validate(allFiles, baseDir, profile, erroriRedazioni);
 process.exit(exitCode);

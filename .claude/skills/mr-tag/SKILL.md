@@ -52,6 +52,9 @@ nessuno script con LLM dentro.
        redazione del 03/10 fa sembrare aggiornati quel giorno 127 doc.
    - Se un commit di redazione non è nel file, aggiungilo prima di taggare, e dillo nel report del
      lotto con lo sha.
+   - **Dopo una riscrittura della storia** gli sha di `mr.redazioni` cambiano: `mr date` e
+     `mr-validate` danno errore su uno sha che non esiste più (dalla 0.6-z8). Aggiorna lo sha con
+     quello nuovo dello stesso commit.
    - **Repo nato da un import** (doc scritti prima e copiati in un solo commit, es. portale-b il
      03/09): riga `import: <sha>` in `mr.redazioni`. Per i doc nati lì `mr date` legge la data
      dichiarata nelle prime righe del testo: «Data:», «Scritto:», «Generato:» danno `created`,

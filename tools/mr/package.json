@@ -1,6 +1,6 @@
 {
   "name": "mr",
-  "version": "0.6.0-z6",
+  "version": "0.6.0-z8",
   "private": true,
   "description": "Comando mr (MR v0.6): claim check, deriva dei link, impatto, verify e suggest-links. Scrive solo verify/suggest-links con --write.",
   "license": "Apache-2.0",

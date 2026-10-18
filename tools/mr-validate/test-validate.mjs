@@ -11,7 +11,7 @@
  * Invocazione: node test-validate.mjs   (exit 0 = tutti pass)
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
@@ -268,6 +268,8 @@ test('tipo backlog (0.6-z6): nessun vincolo di relazioni; vecchio solo per voci 
   assert(!/soglia\.md: Backlog/.test(r.out), 'staleness_threshold: 30d alza la soglia');
   assert(/senza\.md: Backlog: 1 senza una data leggibile in «Aggiornato»: B-001/.test(r.out), 'riga senza data segnalata');
   assert(/t\/fermo .*stale/.test(r.out) && /t\/fresco .*fresh/.test(r.out), 'freshness della tabella');
+  // 0.6-z7 (rilievo dello sprint): in tabella giorni e soglia delle voci «In corso», non 90d e l'età del file
+  assert(/t\/fermo\s+backlog\s+20\s+14d\s/.test(r.out) && /t\/soglia\s+backlog\s+20\s+30d\s/.test(r.out), r.out.split('FRESHNESS')[1]?.slice(0, 900));
 });
 
 test('vincoli di tipo (0.6-z6): spenti sui doc chiusi e con `depends_on: []` esplicito; restano sugli altri', () => {
@@ -282,6 +284,21 @@ test('vincoli di tipo (0.6-z6): spenti sui doc chiusi e con `depends_on: []` esp
   assert(!/report-chiuso\.md: Vincolo tipo/.test(r.out) && !/spec-superata\.md: Vincolo tipo/.test(r.out), 'doc chiusi: nessun vincolo di tipo');
   assert(!/roadmap-vuota\.md: Vincolo tipo/.test(r.out) && !/roadmap-vuota\.md:.*(Schema|fuori profilo)/.test(r.out), '`depends_on: []` esplicito: nessun vincolo, schema valido');
   assert(/roadmap-attiva\.md: Vincolo tipo: un "roadmap" dovrebbe avere almeno un depends_on/.test(r.out), 'il vincolo resta su un doc attivo senza depends_on');
+});
+
+test('mr.redazioni (0.6-z8): uno sha che non esiste nel repo è un errore del validatore; uno valido no', () => {
+  const d = tmpDocs({ 'a.md': 'id: t/a\ntitle: "A"\ntype: guide\nowner: t\nstatus: active' });
+  execFileSync('git', ['init', '-q', d]);
+  execFileSync('git', ['-C', d, 'add', '-A']);
+  execFileSync('git', ['-C', d, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'a']);
+  const vero = execFileSync('git', ['-C', d, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf-8' }).trim();
+  writeFileSync(join(d, 'mr.redazioni'), `import: ${vero}\nimport: 0c40919\n`);
+  const r = run('--profile', 'light', d);
+  writeFileSync(join(d, 'mr.redazioni'), `import: ${vero}\n`);
+  const ok = run('--profile', 'light', d);
+  rmSync(d, { recursive: true, force: true });
+  assert(r.code === 1 && /mr\.redazioni: riga 2: lo sha import «0c40919» non esiste nel repo/.test(r.out), r.out.slice(0, 1500));
+  assert(ok.code === 0 && !/mr\.redazioni:/.test(ok.out), 'sha valido: nessun errore');
 });
 
 const passed = results.filter(Boolean).length;

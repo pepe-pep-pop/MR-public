@@ -225,6 +225,24 @@ test('a lotti: rename, aggiornamenti e frontmatter danno le stesse date del calc
   rmSync(lot, { recursive: true, force: true });
 });
 
+test('sha non risolvibile in mr.redazioni (0.6-z8): errore con file, riga e sha, sia per import sia per redazione', () => {
+  const r0 = realpathSync(mkdtempSync(join(tmpdir(), 'mr-date-sha-')));
+  execFileSync('git', ['init', '-q', r0]);
+  write(r0, 'docs/a.md', '# A\n');
+  execFileSync('git', ['-C', r0, 'add', '-A']);
+  execFileSync('git', ['-C', r0, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'a']);
+  const vero = execFileSync('git', ['-C', r0, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf-8' }).trim();
+  write(r0, 'mr.redazioni', `${vero}  # esiste\nimport: 0c40919  # storia riscritta: non esiste più\n`);
+  const a = run(r0, 'date', 'docs');
+  assert(a.code === 2 && /mr\.redazioni, riga 2: lo sha import «0c40919» non esiste nel repo/.test(a.err), a.err + a.out);
+  write(r0, 'mr.redazioni', 'deadbee  # redazione inesistente\n');
+  const b = run(r0, 'date', 'docs');
+  assert(b.code === 2 && /riga 1: lo sha redazione «deadbee» non esiste/.test(b.err), b.err);
+  write(r0, 'mr.redazioni', `${vero}\nmessaggio: privacy\n`);
+  assert(run(r0, 'date', 'docs').code === 0, 'sha valido e messaggio: nessun errore');
+  rmSync(r0, { recursive: true, force: true });
+});
+
 test('funzioni pure: parseRedazioni, corpo, dateDaCommit', () => {
   const p = parseRedazioni('# c\nABCDEF12 # x\nmessaggio: Privacy #2\n\n');
   assert(p.sha[0] === 'abcdef12' && p.messaggi[0] === 'privacy #2' && !p.errori.length, JSON.stringify(p));

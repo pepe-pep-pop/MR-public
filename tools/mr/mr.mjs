@@ -32,6 +32,7 @@ import { readCodeRefs } from './lib/coderefs.mjs';
 import { readFrontmatter, historicalReason, erroreFrontmatter } from './lib/frontmatter.mjs';
 import { messaggioParser, bloccoMr } from '../lib/illeggibile.mjs';
 import { nonVivo } from './lib/vivi.mjs';
+import { shaNonRisolti } from '../lib/redazioni.mjs';
 import { DriftContext, evaluateRef } from './lib/drift.mjs';
 import { parseDiff, targetDiff, findImpacted, versionOnly } from './lib/impact.mjs';
 import { RepoMap } from './lib/repomap.mjs';
@@ -44,7 +45,7 @@ import { proposeLinks, insertAnchors } from './lib/suggest.mjs';
 import { REDAZIONI_FILE, parseRedazioni, commitsDelFile, dateDaCommit, soloFrontmatterGit, dateImport, commitsDiTutti, dateDiTutti } from './lib/date.mjs';
 import { toJson, toMarkdown, scanToMarkdown, summarizeRefs, impactToMarkdown, ancoraToccata } from './lib/report.mjs';
 
-export const MR_VERSION = '0.6.0-z6';
+export const MR_VERSION = '0.6.0-z8';
 const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi'];
 const WRITERS = new Set(['verify', 'suggest-links', 'remap', 'rivisto']);
 
@@ -507,6 +508,10 @@ export function runDate(opts) {
   if (opts.redazioni && !presente) throw new Error(`--redazioni: file non trovato: ${opts.redazioni}`);
   const regole = presente ? parseRedazioni(readFileSync(file, 'utf-8')) : { sha: [], messaggi: [], import: [], errori: [] };
   if (regole.errori.length) throw new Error(`${file}:\n  ${regole.errori.join('\n  ')}`);
+  // 0.6-z8: uno sha che non c'è più (storia riscritta) o è ambiguo è un errore, non una regola che
+  // smette in silenzio di valere
+  const nonRisolti = presente ? shaNonRisolti(repo.root, readFileSync(file, 'utf-8'), relative(repo.root, file) || file) : [];
+  if (nonRisolti.length) throw new Error(nonRisolti.join('\n  '));
   const fmData = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v) : null);
   // 0.6-z4: con più di qualche doc, un solo git log per il repo e i controlli a lotti
   const aLotti = docs.length > 3;
