@@ -203,8 +203,8 @@ const B = git(root, 'rev-parse', '--short', 'HEAD').trim();
 
 let rep;
 test('scan: un esito per tipo (N8)', () => {
-  const r = run(root, 'scan', 'docs/doc.md', '--format', 'json');
-  assert(r.code === 1, `exit atteso 1, ottenuto ${r.code}\n${r.err}`);
+  const r = run(root, 'scan', 'docs/doc.md', '--format', 'json', '--fail');
+  assert(r.code === 1, `exit atteso 1 con --fail, ottenuto ${r.code}\n${r.err}`);
   rep = JSON.parse(r.out);
   const find = (pred) => rep.refs.filter(pred);
   const one = (path, symbol, extra = () => true) => {
@@ -314,9 +314,10 @@ test('impact --staged e impact <path>; il doc stesso non conta', () => {
 
 test('--format segnalazione: una segnalazione doc-stale per doc, con path:riga e commit (R11, A20)', () => {
   const r = run(root, 'scan', 'docs', '--format', 'segnalazione', '--workspace', 'prova');
-  assert(r.code === 1, `exit atteso 1, ottenuto ${r.code}`);
+  assert(r.code === 0, `exit atteso 0 senza --fail (0.6-z10), ottenuto ${r.code}`);
   assert(r.out.includes('# Segnalazione — docs/doc.md') && r.out.includes('**Tipo:** doc-stale') && r.out.includes('**Workspace:** prova'), 'intestazione mancante');
-  assert(r.out.includes('**Severita:** alta'), 'severità attesa alta (link missing/moved)');
+  assert(r.out.includes('**Peso:** alto (quanto lavoro sul doc)'), 'peso atteso alto (link missing/moved)');
+  assert(r.out.includes('**Quando:** dopo la task in corso (MR segnala, non blocca)'), 'riga «Quando» nella segnalazione');
   assert(r.out.includes(`link \`src/lib/fees.ts#calcolaQuota\` → **drift**`) && r.out.includes(B), 'link in deriva senza commit');
   assert(r.out.includes('Arch non applica la patch') && r.out.includes('## Cosa non fare'), 'sezioni del template mancanti');
   assert(!r.out.includes('docs/_archive/vecchio.md'), 'i doc storici non producono segnalazioni');
@@ -355,11 +356,11 @@ test('scan exit code (0.6-p): con tutti i link ok esce 0 anche con claim non tro
   git(d, 'commit', '-q', '-m', 'doc');
   const a = run(d, 'scan', 'docs/con-link.md', '--format', 'json');
   const ja = JSON.parse(a.out);
-  const b = run(d, 'scan', 'docs/senza-link.md');
-  const both = run(d, 'scan', 'docs');
+  const b = run(d, 'scan', 'docs/senza-link.md', '--fail');
+  const both = run(d, 'scan', 'docs', '--fail');
   write(d, 'src/lib.ts', 'export function calcola(x: number) {\n  return x * 3;\n}\n');
   git(d, 'commit', '-q', '-am', 'cambia calcola');
-  const drift = run(d, 'scan', 'docs/con-link.md');
+  const drift = run(d, 'scan', 'docs/con-link.md', '--fail');
   rmSync(d, { recursive: true, force: true });
   assert(a.code === 0, `link ok + claim non trovato: exit atteso 0, ottenuto ${a.code}`);
   assert(ja.claims.some((x) => x.claim === 'src/inesistente.ts' && x.status === 'not_found') && ja.refs.every((r) => r.status === 'ok'), 'il claim non trovato resta nel report');

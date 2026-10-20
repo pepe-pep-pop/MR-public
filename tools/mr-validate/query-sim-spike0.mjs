@@ -15,7 +15,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import matter from "gray-matter";
+import grayMatter from 'gray-matter';
+
+// 0.6-z13 (R1, report/sicurezza-2026-10-18.md): con le opzioni di default gray-matter passa a `eval`
+// un frontmatter che si apre con `---js` o `---javascript`. Qui il frontmatter è solo YAML (o JSON):
+// gli altri linguaggi diventano un frontmatter non leggibile, e nessun codice del doc viene eseguito.
+const rifiutaJs = () => { throw Object.assign(new Error('frontmatter in JavaScript non ammesso: solo YAML'), { jsVietato: true }); };
+const MATTER_OPZIONI = Object.freeze({ engines: { js: rifiutaJs, javascript: rifiutaJs } });
+const matter = (raw) => grayMatter(raw, MATTER_OPZIONI);
+matter.stringify = (content, data) => grayMatter.stringify(content, data, MATTER_OPZIONI);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_DIR = path.resolve(__dirname, "../test-files");

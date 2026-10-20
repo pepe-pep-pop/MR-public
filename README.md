@@ -50,6 +50,8 @@ node tools/mr/mr.mjs claims <doc|cartella> [--code-repo <dir>]   # affermazioni 
 node tools/mr/mr.mjs scan   <doc|cartella>                        # claims + deriva delle ancore doc → codice
 node tools/mr/mr.mjs impact <commit|a..b|--staged>                # doc da ricontrollare dopo una modifica
 node tools/mr/mr.mjs coverage [<repo>]                            # punti d'ingresso che nessun doc cita
+node tools/mr/mr.mjs env [<repo>]                                 # variabili lette dal codice ↔ elenchi (.env*.example o doc)
+node tools/mr/mr.mjs stato [<repo>]                               # a che punto è il repo con MR e qual è il passo dopo
 node tools/mr/mr.mjs vivi <repo> --senza-frontmatter              # doc vivi ancora senza frontmatter
 node tools/mr/mr.mjs date <doc|cartella>                          # created e last_updated da git
 

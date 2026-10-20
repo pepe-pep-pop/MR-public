@@ -201,8 +201,11 @@ const head = git(root, 'rev-parse', 'HEAD').trim();
 
 let report;
 test('json: esiti attesi per ogni tipo', () => {
-  const r = run(root, 'claims', 'docs/README.md', '--format', 'json');
-  assert(r.code === 1, `exit atteso 1 (ci sono not_found), ottenuto ${r.code}\n${r.err}`);
+  const r = run(root, 'claims', 'docs/README.md', '--format', 'json', '--fail');
+  assert(r.code === 1, `exit atteso 1 con --fail (ci sono not_found), ottenuto ${r.code}\n${r.err}`);
+  // 0.6-z10 (M2): senza --fail, 0 anche con not_found (MR segnala, non blocca)
+  const senza = run(root, 'claims', 'docs/README.md', '--format', 'json');
+  assert(senza.code === 0, `senza --fail exit atteso 0, ottenuto ${senza.code}`);
   report = JSON.parse(r.out);
   const st = (claim) => report.claims.find((c) => c.claim === claim)?.status;
   const expect = {
@@ -253,7 +256,8 @@ test('nomi con SECRET/SEGRETI (0.6-z5): i doc .md si leggono, gli altri file no'
 
 test('md: doc in testa, solo not_found e ambiguous di default, tutto con --all', () => {
   const r = run(root, 'claims', 'docs');
-  assert(r.code === 1, `exit ${r.code}`);
+  assert(r.code === 0, `exit ${r.code} (0.6-z10: 0 anche con not_found)`);
+  assert(r.out.includes('MR segnala, non blocca'), 'riga «non blocca» in testa al report md');
   assert(r.out.includes('## docs/README.md') && r.out.includes('❌ not_found'), 'report md incompleto');
   assert(!r.out.includes('✅ found |'), 'i found non vanno mostrati di default');
   assert(run(root, 'claims', 'docs', '--all').out.includes('✅ found |'), '--all deve mostrare i found');
@@ -395,10 +399,10 @@ test('esito external (0.6-f): file-stem, classe esterno:, --external-repo, ester
     assert(a.conferma_docente === 'found/file-stem', `file-stem: ${a.conferma_docente}`);
     assert(a.hs_lead_status === 'external/dichiarato', `classe esterno: ${a.hs_lead_status}`);
     assert(a.tolto_apposta === 'ignored/allow-list', `identifier: nell'allow-list: ${a.tolto_apposta}`);
-    const withExt = run(app, 'claims', 'docs/a.md', '--format', 'json', '--external-repo', backend);
+    const withExt = run(app, 'claims', 'docs/a.md', '--format', 'json', '--external-repo', backend, '--fail');
     const b = st(withExt.out);
     assert(b.check_answer === 'external/repo-esterno' && b.davvero_assente === 'not_found/word', JSON.stringify(b));
-    assert(withExt.code === 1, 'davvero_assente resta un segnale: exit 1');
+    assert(withExt.code === 1, 'davvero_assente resta un segnale: exit 1 con --fail');
     // stesso effetto con esterni: in mr.repos.yaml (path relativo alla root del repo dei doc)
     write(app, 'mr.repos.yaml', `repos:\n  backend: ${relative(app, backend)}\nesterni: [backend]\n`);
     const c = st(run(app, 'claims', 'docs/a.md', '--format', 'json').out);

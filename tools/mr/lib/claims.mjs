@@ -36,7 +36,7 @@ export function parseIgnore(text) {
     .map((raw) => {
       const fonte = (raw.match(/\s#\s*(.*)$/) || [])[1]?.trim();
       const l = raw.replace(/\s+#.*$/, '').trim();
-      const m = l.match(/^(path|env|table|endpoint|command|symbol|identifier|doc|storico|esterno|codice):(.+)$/);
+      const m = l.match(/^(path|env|table|endpoint|command|symbol|identifier|doc|storico|esterno|codice|personali):(.+)$/);
       if (m && m[1] === 'esterno') return { kind: 'esterno', re: wildcardToRegex(m[2]), ...(fonte ? { fonte } : {}) };
       return m ? { kind: m[1], re: wildcardToRegex(m[2]) } : { kind: null, re: wildcardToRegex(l) };
     })

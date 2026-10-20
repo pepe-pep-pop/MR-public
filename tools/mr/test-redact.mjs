@@ -35,10 +35,11 @@ const cases = [
   ['+  SESSION_SECRET=<quello generato sopra>', '+  SESSION_SECRET=<quello generato sopra>'],
   ['+  password: "hunter2hunter2"', '+ [riga omessa: possibile segreto]'],
   ['+  API_TOKEN=a1b2c3d4e5f6g7h8i9', '+ [riga omessa: possibile segreto]'],
-  ['+  const k = "sk_live_51HxYz0123456789abcd";', '+ [riga omessa: possibile segreto]'],
-  ['+  auth: "ghp_abcdefghijklmnopqrstuvwxyz0123"', '+ [riga omessa: possibile segreto]'],
+  // token finti spezzati: il file va nella copia pubblica, che rifiuta le forme di token (0.6-z13, R5)
+  ['+  const k = "sk_' + 'live_51HxYz0123456789abcd";', '+ [riga omessa: possibile segreto]'],
+  ['+  auth: "gh' + 'p_abcdefghijklmnopqrstuvwxyz0123"', '+ [riga omessa: possibile segreto]'],
   ['+  Authorization: Bearer abcdefghijklmnop0123456789', '+ [riga omessa: possibile segreto]'],
-  ['+  url = postgres://app:s3cretPass@db:5432/x', '+ [riga omessa: possibile segreto]'],
+  ['+  url = postgres://app:s3cret' + 'Pass@db:5432/x', '+ [riga omessa: possibile segreto]'],
   ['+  hash 0123456789abcdef0123456789abcdef01234567', '+ [riga omessa: possibile segreto]'],
   // regola ibrida (maintainer, 07/10): nome da segreto + letterale → sempre oscurato, anche corto
   ['+  password: hunter', '+ [riga omessa: possibile segreto]'],

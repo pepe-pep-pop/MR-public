@@ -16,6 +16,7 @@
 
 import { verifiedCause } from './cause.mjs';
 import { verboLegato } from './verbo.mjs';
+import { claimMostrabile } from './drift.mjs';
 
 const MAX_CAUSES = 60;
 
@@ -73,12 +74,16 @@ function causeOfClaim(repos, r) {
   return null;
 }
 
+// peso (fino alla 0.6-z9 «Severita»): quanto lavoro chiede il doc, non quanto è urgente
 function severity(nf, refSignals) {
   const strong = refSignals.filter((r) => r.status === 'missing' || r.status === 'moved').length;
-  if (strong || nf >= 5) return 'alta';
-  if (refSignals.length || nf >= 2) return 'media';
-  return 'bassa';
+  if (strong || nf >= 5) return 'alto';
+  if (refSignals.length || nf >= 2) return 'medio';
+  return 'basso';
 }
+
+// MR segnala, non blocca (0.6-z10): quando agire, accanto al peso
+const QUANDO = '**Quando:** dopo la task in corso (MR segnala, non blocca); subito solo per dati personali o segreti in chiaro.';
 
 /**
  * @param {object} meta - meta di runClaims / runScan
@@ -119,7 +124,8 @@ export function toSegnalazioni(meta, records, refs, repoFor, opts = {}) {
     L.push(`**Data:** ${today}`);
     L.push(`**Workspace:** ${workspace}`);
     L.push('**Tipo:** doc-stale');
-    L.push(`**Severita:** ${severity(claims.length, rs)}`);
+    L.push(`**Peso:** ${severity(claims.length, rs)} (quanto lavoro sul doc)`);
+    L.push(QUANDO);
     L.push('**Stato:** aperta', '');
     L.push('## Osservato', '');
     L.push(`Path letto (non modificato): \`${meta.repo}/${doc}\``, '');
@@ -134,7 +140,7 @@ export function toSegnalazioni(meta, records, refs, repoFor, opts = {}) {
         causes++;
         cause = causeOfClaim(opts.reposForCause || [repoFor(r.code_repo)], r);
       }
-      L.push(`- riga ${r.line}${r.section ? ` (${r.section})` : ''}: ${r.kind} \`${r.claim}\` non trovato${r.code_repo ? ` in ${r.code_repo}` : ''}${cause ? ` · causato da ${cause}` : ''}`);
+      L.push(`- riga ${r.line}${r.section ? ` (${r.section})` : ''}: ${r.kind} \`${claimMostrabile(r.claim, r.doc, r.line)}\` non trovato${r.code_repo ? ` in ${r.code_repo}` : ''}${cause ? ` · causato da ${cause}` : ''}`);
     }
     L.push('', '## Chi deve agire', '', `Agente del workspace \`${workspace}\`. Arch non applica la patch.`, '');
     L.push('## Cosa fare', '');
@@ -243,13 +249,14 @@ function toSegnalazioniCausate(meta, records, repoFor, opts) {
     L.push(`**Data:** ${opts.today || new Date().toISOString().slice(0, 10)}`);
     L.push(`**Workspace:** ${opts.workspace || meta.repo.toLowerCase()}`);
     L.push('**Tipo:** doc-stale');
-    L.push(`**Severita:** ${claims.length >= 3 ? 'alta' : claims.length === 2 ? 'media' : 'bassa'}`);
+    L.push(`**Peso:** ${claims.length >= 3 ? 'alto' : claims.length === 2 ? 'medio' : 'basso'} (quanto lavoro sul doc)`);
+    L.push(QUANDO);
     L.push('**Stato:** aperta', '');
     L.push('## Osservato', '');
     L.push(`Path letto (non modificato): \`${meta.repo}/${doc}\``, '');
     L.push(`Ogni riga ha la prova di deriva: il nome c'era nel codice al commit indicato e lì è sparito (\`${meta.tool}\`, sola lettura).`, '');
     for (const r of claims.sort((a, b) => a.line - b.line)) {
-      L.push(`- riga ${r.line}${r.section ? ` (${r.section})` : ''}: ${r.kind} \`${r.claim}\` non trovato${r.code_repo ? ` in ${r.code_repo}` : ''} · causato da ${r.cause}`);
+      L.push(`- riga ${r.line}${r.section ? ` (${r.section})` : ''}: ${r.kind} \`${claimMostrabile(r.claim, r.doc, r.line)}\` non trovato${r.code_repo ? ` in ${r.code_repo}` : ''} · causato da ${r.cause}`);
     }
     L.push('', '## Chi deve agire', '', `Agente del workspace \`${opts.workspace || meta.repo.toLowerCase()}\`. Arch non applica la patch.`, '');
     L.push('## Cosa fare', '', '1. Per ogni riga: guardare il commit indicato e correggere il doc (o togliere il riferimento).', '2. Rilanciare `mr claims` sul doc: nessun segnale atteso.', '');

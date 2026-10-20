@@ -26,7 +26,7 @@
  * Sola lettura: `git log`, niente checkout.
  */
 
-import { execFileSync } from 'node:child_process';
+import { gitSicuro } from '../../lib/git-sicuro.mjs';
 
 export const REDAZIONI_FILE = 'mr.redazioni';
 
@@ -57,7 +57,7 @@ export function diRedazione(commit, regole) {
 
 /** commit che toccano il file, dal più recente: [{ hash, date, subject, path }] (path a quel commit) */
 export function commitsDelFile(root, rev, rel) {
-  const out = execFileSync('git', ['-C', root, 'log', rev || 'HEAD', '--follow', '--format=%x00%H%x09%as%x09%s', '--name-only', '--', rel], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
+  const out = gitSicuro(root, ['log', rev || 'HEAD', '--follow', '--format=%x00%H%x09%as%x09%s', '--name-only', '--', rel], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 });
   return out.split('\0').filter((b) => b.trim()).map((b) => {
     const [head, ...files] = b.split('\n').filter(Boolean);
     const [hash, date, ...s] = head.split('\t');
@@ -86,7 +86,7 @@ export function corpo(text) {
 export function soloFrontmatterGit(root, commits) {
   const show = (c, path) => {
     try {
-      return execFileSync('git', ['-C', root, 'show', `${c}:${path}`], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
+      return gitSicuro(root, ['show', `${c}:${path}`], { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] });
     } catch {
       return null;
     }
@@ -191,7 +191,7 @@ export function dateImport(d, commits, regole, text) {
  * @returns {Map<string, Array<{hash, date, subject, path}>>}
  */
 export function commitsDiTutti(root, rev, rels) {
-  const out = execFileSync('git', ['-C', root, 'log', rev || 'HEAD', '-M', '--format=%x00%H%x09%as%x09%s', '--name-status'], { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 1024 });
+  const out = gitSicuro(root, ['log', rev || 'HEAD', '-M', '--format=%x00%H%x09%as%x09%s', '--name-status'], { encoding: 'utf-8', maxBuffer: 1024 * 1024 * 1024 });
   const lists = new Map(rels.map((r) => [r, []]));
   const tracked = new Map(rels.map((r) => [r, r])); // path a quel punto della storia → doc
   for (const b of out.split('\0')) {
@@ -223,7 +223,7 @@ export function commitsDiTutti(root, rev, rels) {
 /** contenuto di molti `<rev>:<path>` con un solo `git cat-file --batch`: null se l'oggetto non c'è */
 export function leggiBlob(root, richieste) {
   if (!richieste.length) return [];
-  const raw = execFileSync('git', ['-C', root, 'cat-file', '--batch'], { input: richieste.map((r) => r.replace(/\n/g, '')).join('\n') + '\n', maxBuffer: 1024 * 1024 * 1024 });
+  const raw = gitSicuro(root, ['cat-file', '--batch'], { input: richieste.map((r) => r.replace(/\n/g, '')).join('\n') + '\n', maxBuffer: 1024 * 1024 * 1024 });
   const out = [];
   let i = 0;
   while (out.length < richieste.length && i < raw.length) {

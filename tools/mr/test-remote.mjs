@@ -40,6 +40,9 @@ writeFileSync(fake, `#!/usr/bin/env node
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(LOG)}, args.join(' ') + '\\n');
+// quale token vede gh (0.6-z13): solo «mr» o «utente», mai il valore
+const quale = { 'finto-generale': 'generale', 'finto-acme': 'acme' }[process.env.GH_TOKEN] || (process.env.GH_TOKEN ? 'altro' : 'utente');
+fs.appendFileSync(${JSON.stringify(LOG + '.token')}, (args.find((a) => a.startsWith('repos/')) || '').split('/')[1] + ' ' + quale + '\\n');
 const FILES = ${JSON.stringify(FILES)};
 const ep = args.find((a) => a.startsWith('repos/'));
 if (args.some((a) => a.startsWith('-X') || a === '--method' || a === '-f' || a === '-F')) { process.stderr.write('scrittura vietata'); process.exit(3); }
@@ -66,7 +69,8 @@ code_refs:
 # Nota
 `);
 execFileSync('git', ['-C', docs, 'add', '-A']);
-const env = { ...process.env, MR_GH_BIN: fake };
+const env = { ...process.env, MR_GH_BIN: fake, MR_GH_PORTACHIAVI: 'no' };
+for (const k of Object.keys(env)) if (k.startsWith('MR_GH_TOKEN')) delete env[k];
 const run = (...a) => { const r = spawnSync(process.execPath, [MR, ...a], { cwd: docs, encoding: 'utf-8', env }); return { code: r.status, out: r.stdout || '', err: r.stderr || '' }; };
 
 test('senza --remote: i link a repo non locali restano unresolvable, nessuna chiamata a gh', () => {
@@ -97,6 +101,33 @@ test('solo letture: nessuna chiamata con metodo o campi di scrittura', () => {
   const log = readFileSync(LOG, 'utf-8');
   assert(!/(^|\s)(-X|--method|-f|-F|--field|--raw-field)(\s|$)/m.test(log), log);
   assert(log.split('\n').filter(Boolean).every((l) => /^api /.test(l)), log);
+});
+
+// token in sola lettura per owner (0.6-z13, R8): il gh finto scrive «<owner> <token visto>», mai il valore
+const tokenVisti = (extra) => {
+  rmSync(LOG + '.token', { force: true });
+  const r = spawnSync(process.execPath, [MR, 'scan', 'nota.md', '--remote'], { cwd: docs, encoding: 'utf-8', env: { ...env, ...extra } });
+  assert(!/finto-(acme|generale)/.test(r.stdout + r.stderr), 'valore del token stampato');
+  const visti = {};
+  for (const l of readFileSync(LOG + '.token', 'utf-8').split('\n').filter(Boolean)) { const [o, t] = l.split(' '); (visti[o] ??= new Set()).add(t); }
+  return Object.fromEntries(Object.entries(visti).map(([o, t]) => [o, [...t].join(',')]));
+};
+
+test('R8, token dell\'owner: MR_GH_TOKEN_<OWNER> solo per i repo di quell\'owner, gli altri con la generale', () => {
+  const v = tokenVisti({ MR_GH_TOKEN_ACME: 'finto-acme', MR_GH_TOKEN: 'finto-generale' });
+  assert(v.acme === 'acme' && (!v.altri || v.altri === 'generale'), JSON.stringify(v));
+});
+
+test('R8, solo la generale: MR_GH_TOKEN per ogni owner', () => {
+  const v = tokenVisti({ MR_GH_TOKEN: 'finto-generale' });
+  assert(v.acme === 'generale' && (!v.altri || v.altri === 'generale'), JSON.stringify(v));
+});
+
+test('R8, nessuna variabile per l\'owner né generale: l\'autenticazione di gh, come prima', () => {
+  const v = tokenVisti({ MR_GH_TOKEN_ALTRI: 'finto-generale' });
+  assert(v.acme === 'utente', JSON.stringify(v));
+  const n = tokenVisti({});
+  assert(Object.values(n).every((t) => t === 'utente'), JSON.stringify(n));
 });
 
 rmSync(base, { recursive: true, force: true });

@@ -3,7 +3,7 @@
  * giro.mjs — giro settimanale: claim check sui workspace attivi, un solo report per arch
  * (report/0.6-f/regole.md §4, decisione 4 del maintainer).
  *
- *   node tools/mr/giro.mjs [--indice <file>] [--only <slug>]... [--exclude <slug>]... [--fetch] [--locale] [--ignore-dir <dir>] [--senza-pr] [--write | --out <file>]
+ *   node tools/mr/giro.mjs [--indice <file>] [--only <slug>]... [--exclude <slug>]... [--fetch] [--locale] [--ignore-dir <dir>] [--senza-pr] [--senza-indice] [--write | --out <file>]
  *   node tools/mr/giro.mjs --precisione [--giro-dir <dir> | --file <report>...]
  *   node tools/mr/giro.mjs --precisione-ancore [--giro-dir <dir> | --file <report>...]
  *
@@ -39,15 +39,23 @@
  * - sezione «Ancore in deriva» (0.6-s): ancore e code_refs dei doc del giro valutati alla stessa
  *   versione (missing, moved, drift, unresolvable), conteggio a parte; --precisione-ancore:
  *   doc da correggere / valutate. --precisione non le legge.
+ * - indice dei doc (0.6-z17): un giro completo (senza --only/--exclude) con --write o --out riscrive
+ *   anche ~/.mr/indice/INDICE_DOC.tsv (MR_INDICE_DIR), come `mr indice --write`; --senza-indice no.
  *
  * Exit: 0 eseguito, 2 errore d'uso (indice mancante).
  */
 
-import { execFileSync } from 'node:child_process';
+import { gitSicuro } from '../lib/git-sicuro.mjs';
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MR_VERSION, refsOfDoc } from './mr.mjs';
+import { NON_BLOCCA } from './lib/report.mjs';
+import { claimMostrabile } from './lib/drift.mjs';
+import { parseIndice, defaultIndice, workspaceRepos } from './lib/indice.mjs';
+
+// indice di arch: in lib/indice.mjs (0.6-z11), condiviso con `mr stato`
+export { parseIndice, defaultIndice, workspaceRepos };
 import { saluteDocs } from './lib/salute.mjs';
 import { readFrontmatter } from './lib/frontmatter.mjs';
 import { leggiBlob } from './lib/date.mjs';
@@ -56,28 +64,14 @@ import { toSegnalazioni } from './lib/segnalazione.mjs';
 import { RepoView, isSecretPath } from './lib/repo.mjs';
 import { checkDocs, loadIgnore, parseIgnore, IGNORE_FILE, codeExcludes } from './lib/claims.mjs';
 import { RepoMap } from './lib/repomap.mjs';
+import { ghEsegui, nomeCanonico } from './lib/remote.mjs';
+import { costruisciIndice, scriviIndice } from './lib/indicedoc.mjs';
+import { nomiLetti, nomiEsempi, nomiNeiDoc, confrontoEnv, loadEnvConfig, envFileEsterni } from './lib/env.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MR_ROOT = resolve(here, '../..');
 
-/**
- * Indice di default. Da un worktree della release (`git worktree add --detach <dir> v0.6.0-x`)
- * il percorso relativo non porta a _arch: si risale al clone principale con --git-common-dir (0.6-j).
- */
-export function defaultIndice(root = MR_ROOT) {
-  const direct = resolve(root, '../../_arch/segnalazioni/indice.md');
-  if (existsSync(direct)) return direct;
-  try {
-    const common = execFileSync('git', ['-C', root, 'rev-parse', '--path-format=absolute', '--git-common-dir'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    const viaClone = resolve(dirname(common), '../../_arch/segnalazioni/indice.md');
-    if (existsSync(viaClone)) return viaClone;
-  } catch {
-    // non è un repo git
-  }
-  return direct;
-}
 const GIRO_DIR = join(MR_ROOT, 'report/giro');
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', '.venv', 'vendor', 'Pods', 'DerivedData']);
 const ESITI = ['confermata', 'scartata', 'non valutata'];
 
 // doc storici per path e regole dell'allow-list: in lib/vivi.mjs (0.6-z4), condivisi con `mr vivi`
@@ -96,6 +90,7 @@ function parseArgs(argv) {
     else if (a === '--file') o.files.push(argv[++i]);
     else if (a === '--ignore-dir') o.ignoreDir = argv[++i];
     else if (a === '--senza-pr') o.senzaPr = true;
+    else if (a === '--senza-indice') o.senzaIndice = true;
     else if (a === '--write') o.write = true;
     else if (a === '--precisione') o.precisione = true;
     else if (a === '--precisione-ancore') o.precisioneAncore = true;
@@ -105,59 +100,8 @@ function parseArgs(argv) {
   return o;
 }
 
-/** workspace dall'indice di arch: [{slug, gruppo, path, attivo, motivo}] */
-export function parseIndice(text) {
-  const archivio = new Set();
-  const line = text.split('\n').find((l) => /^\*\*Archivio:\*\*/.test(l));
-  if (line) for (const m of line.matchAll(/`([^`]+)`/g)) archivio.add(m[1]);
-  const out = [];
-  for (const l of text.split('\n')) {
-    const m = l.match(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|/);
-    if (!m) continue;
-    const [, slug, gruppo, path] = m;
-    const motivo = archivio.has(slug) ? 'archivio' : gruppo === 'archivio' ? 'gruppo archivio' : null;
-    out.push({ slug, gruppo, path, attivo: !motivo, motivo });
-  }
-  return out;
-}
-
 function git(dir, args) {
-  return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
-}
-
-/** repo da leggere per un workspace: [{root, dir}] (dir = cartella su cui lanciare claims) */
-export function workspaceRepos(path) {
-  const out = [];
-  if (!existsSync(path)) return out;
-  // repo che contiene la cartella, se la cartella non è la sua root e ha .md tracciati
-  try {
-    const top = git(path, ['rev-parse', '--show-toplevel']).trim();
-    if (resolve(top) !== resolve(path)) {
-      // contenitore esterno (es. il monorepo per monorepo/apps/lezioni): solo i suoi doc sotto la cartella
-      if (git(path, ['ls-files', '--', '*.md']).trim()) out.push({ root: top, dir: path, outer: true });
-    } else {
-      out.push({ root: top, dir: path });
-    }
-  } catch {
-    // non è dentro un repo git
-  }
-  const walk = (d, depth) => {
-    if (depth > 3) return;
-    let entries = [];
-    try {
-      entries = readdirSync(d, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      if (!e.isDirectory() || e.name.startsWith('.') || SKIP_DIRS.has(e.name)) continue;
-      const sub = join(d, e.name);
-      if (existsSync(join(sub, '.git'))) out.push({ root: sub, dir: sub });
-      walk(sub, depth + 1);
-    }
-  };
-  walk(path, 1);
-  return out;
+  return gitSicuro(dir, [...args], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] });
 }
 
 /**
@@ -222,7 +166,7 @@ export function repoRef(root, { fetch = false, locale = false } = {}) {
 /**
  * File toccati dalle PR aperte del repo su GitHub (0.6-q): una segnalazione su un doc che una PR
  * aperta sta già correggendo non è nuova. Sola lettura (`gh pr list`). `MR_GH_BIN` sostituisce
- * `gh` nei test.
+ * `gh` nei test; con `MR_GH_TOKEN`, `gh` usa il token in sola lettura di MR (`ghEsegui`).
  * @returns {{ ok: boolean, slug?: string, files: Map<string, number[]>, note?: string }}
  */
 /**
@@ -250,12 +194,26 @@ export function openPrFiles(root) {
   }
   const m = url.match(/github\.com[:/]([^/]+\/[^/]+?)(?:\.git)?$/);
   if (!m) return { ok: false, files, note: 'origin non è su GitHub' };
-  const slug = m[1];
+  let slug = m[1];
+  let rediretto = null;
+  const elenco = (s) => ghEsegui(['pr', 'list', '--repo', s, '--state', 'open', '--json', 'number,files,headRefOid', '--limit', '100'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let out;
   try {
-    out = execFileSync(process.env.MR_GH_BIN || 'gh', ['pr', 'list', '--repo', slug, '--state', 'open', '--json', 'number,files,headRefOid', '--limit', '100'], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
+    out = elenco(slug);
   } catch (err) {
-    return { ok: false, slug, files, note: `gh non disponibile o errore (${String(err.message).split('\n')[0].slice(0, 80)})` };
+    // 0.6-z16: repo trasferito o rinominato, con origin ancora sul nome vecchio. Si rilegge con il
+    // nome attuale (e il token del suo owner), e il report chiede di aggiornare il remote.
+    const canon = /Could not resolve to a Repository/i.test(String(err.stderr || '') + String(err.message || '')) ? nomeCanonico(slug) : null;
+    if (!canon || canon.toLowerCase() === slug.toLowerCase()) {
+      return { ok: false, slug, files, note: `gh non disponibile o errore (${String(err.message).split('\n')[0].slice(0, 80)})` };
+    }
+    rediretto = { da: slug, a: canon };
+    slug = canon;
+    try {
+      out = elenco(slug);
+    } catch (err2) {
+      return { ok: false, slug, files, rediretto, note: `repo spostato in ${canon}, PR non lette (${String(err2.message).split('\n')[0].slice(0, 80)})` };
+    }
   }
   const heads = new Map(); // numero → commit di testa della PR (0.6-z4: frontmatter in PR)
   try {
@@ -267,9 +225,9 @@ export function openPrFiles(root) {
       }
     }
   } catch {
-    return { ok: false, slug, files, note: 'risposta di gh non leggibile' };
+    return { ok: false, slug, files, rediretto, note: 'risposta di gh non leggibile' };
   }
-  return { ok: true, slug, files, heads };
+  return { ok: true, slug, files, heads, ...(rediretto ? { rediretto } : {}) };
 }
 
 /**
@@ -286,7 +244,7 @@ export function frontmatterInPr(root, prs, senza) {
   const diffDi = (n) => {
     if (!diffs.has(n)) {
       try {
-        diffs.set(n, execFileSync(process.env.MR_GH_BIN || 'gh', ['pr', 'diff', String(n), '--repo', prs.slug], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 }));
+        diffs.set(n, ghEsegui(['pr', 'diff', String(n), '--repo', prs.slug], { stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 256 * 1024 * 1024 }));
       } catch {
         diffs.set(n, '');
       }
@@ -324,12 +282,12 @@ export function frontmatterInPr(root, prs, senza) {
   return out;
 }
 
-/** una segnalazione per blocco: {doc, affermazioni, severita, testo} */
+/** una segnalazione per blocco: {doc, affermazioni, severita (il peso), testo} */
 function splitSegnalazioni(text) {
   if (!text.trim() || text.trim() === 'Nessuna segnalazione.') return [];
   return text.split('\n\n---\n\n').map((b) => {
     const h = b.match(/^# Segnalazione — (.+): (\d+) affermazioni/m);
-    const sev = b.match(/^\*\*Severita:\*\* (\S+)/m);
+    const sev = b.match(/^\*\*(?:Peso|Severita):\*\* (\S+)/m);
     return { doc: h ? h[1] : '?', affermazioni: h ? Number(h[2]) : 0, severita: sev ? sev[1] : '?', testo: b.trim() };
   });
 }
@@ -371,6 +329,9 @@ function runGiro(o) {
   // salute dei doc (0.6-x): frontmatter MR dei doc vivi, conteggio a parte
   const salute = []; // [{slug, repo, ...saluteDocs}]
   const prNotes = new Map(); // repo → nota se le PR non si sono potute leggere
+  const redirect = new Map(); // repo → { da, a }: origin sul nome vecchio di un repo spostato (0.6-z16)
+  // elenchi env (0.6-z9): variabili lette dal codice contro gli elenchi, conteggio a parte
+  const elenchiEnv = []; // [{slug, repo, ...confrontoEnv}]
   for (const w of chosen) {
     const repos = workspaceRepos(w.path);
     if (!repos.length) {
@@ -400,6 +361,7 @@ function runGiro(o) {
       }
     }
     const outerRoot = repos.find((x) => x.outer)?.root;
+    const testiVivi = []; // testo dei doc vivi del workspace, per «citato in un doc» (0.6-z9)
     const inner = [...views.keys()].filter((root) => root !== outerRoot);
     for (const r of repos) {
       const view = views.get(r.root);
@@ -498,6 +460,7 @@ function runGiro(o) {
         const storRegola = docs.filter((d) => esclusoDaRegola(d, regole) === 'regola storico:');
         const sd = saluteDocs(vivi.map((d) => ({ doc: d, text: view.readFile(d) })), today, [...ancoraOnly, ...storRegola].map((d) => ({ doc: d, text: view.readFile(d) })));
         salute.push({ slug: w.slug, repo: repoName, ...sd });
+        for (const d of vivi) testiVivi.push(view.readFile(d));
         // ancore e code_refs dei doc che ne hanno, alla stessa versione letta (0.6-s)
         for (const d of [...docs, ...ancoraOnly]) {
           if (!/<!--\s*mr:code\b|^code_refs:/m.test(view.readFile(d))) continue;
@@ -521,6 +484,7 @@ function runGiro(o) {
       for (const a of out.appendix) appendix.push({ ...a, id: `${w.slug}/${repoName}/${a.doc}` });
       const prs = o.senzaPr ? null : openPrFiles(r.root);
       if (prs && !prs.ok) prNotes.set(`${w.slug}/${repoName}`, prs.note);
+      if (prs?.rediretto) redirect.set(`${w.slug}/${repoName}`, prs.rediretto);
       // frontmatter che sta in una PR aperta (0.6-z4): il giro legge origin/<default> e non lo vedrebbe
       const sdRepo = salute.find((x) => x.slug === w.slug && x.repo === repoName);
       if (sdRepo) sdRepo.inPr = frontmatterInPr(r.root, prs, sdRepo.senza);
@@ -543,10 +507,34 @@ function runGiro(o) {
         blocks.push(`### ${id}\n\n${s2.testo.replace(/^# /m, '#### ').replace(/^## /gm, '##### ')}`);
       }
     }
+    // elenchi env (0.6-z9): per ogni repo del workspace, anche senza doc (cta-backend), contro i suoi
+    // file d'esempio o, se non ne ha, contro i doc vivi di tutto il workspace
+    const neiDoc = nomiNeiDoc(testiVivi);
+    const fatti = new Set();
+    for (const r of repos) {
+      const root = r.root;
+      const v = views.get(root);
+      // il workspace è una cartella di un repo più grande (GL): solo quella cartella
+      const prefix = v ? relative(root, r.dir) || '.' : '.';
+      if (!v || fatti.has(`${root}|${prefix}`)) continue;
+      fatti.add(`${root}|${prefix}`);
+      try {
+        const regole = [...(v.hasFile(IGNORE_FILE) ? loadIgnore(v) : []), ...central];
+        const cv = new RepoView(root, v.rev);
+        cv.excludeCode(codeExcludes(regole));
+        const cfg = loadEnvConfig(cv);
+        const letti = nomiLetti(cv, cfg.helpers, prefix);
+        const esempi = nomiEsempi(cv, prefix);
+        if (!letti.size && !esempi.files.length) continue;
+        elenchiEnv.push({ slug: w.slug, repo: root.split('/').pop(), ...confrontoEnv(letti, esempi, neiDoc, { ignore: cfg.ignore, rules: regole, esterni: envFileEsterni(cv, prefix) }) });
+      } catch (err) {
+        notes.push(`\`${w.slug}\` / ${root.split('/').pop()}: elenchi env non letti (${err.message.split('\n')[0]})`);
+      }
+    }
   }
 
   const L = [];
-  L.push(`# Giro settimanale MR — ${today}`, '');
+  L.push(`# Giro settimanale MR — ${today}`, '', NON_BLOCCA, '');
   L.push(`Tool: \`mr ${MR_VERSION}\`, \`mr claims --format segnalazione\`, sola lettura. Indice: \`${o.indice}\` (letto, non modificato).`);
   L.push(`Workspace letti: ${chosen.length} · repo letti: ${reposRead} · segnalazioni: ${rows.length} · affermazioni con prova di deriva: ${affermazioni}.`);
   L.push(`Ancore (conteggio a parte, sezione «Ancore in deriva»): ${ancoreStat.lette} lette in ${ancoreStat.docs.size} doc · da rileggere: ${ancore.length}.`);
@@ -555,12 +543,14 @@ function runGiro(o) {
     const t = salute.reduce((a, x) => a + x.taggati, 0);
     L.push(`Salute dei doc (conteggio a parte, sezione «Salute dei doc»): ${t} doc vivi su ${v} con frontmatter MR (più ${salute.reduce((a, x) => a + (x.inPr || []).length, 0)} in PR aperte), in ${salute.filter((x) => x.taggati).length} repo su ${salute.length}; da aggiornare (review_needed): ${salute.reduce((a, x) => a + (x.daAggiornare || []).length, 0)}.`);
   }
+  L.push(`Elenchi env (conteggio a parte, sezione «Elenchi env»): ${elenchiEnv.reduce((a, x) => a + x.non_elencati.length, 0)} variabili lette dal codice e non elencate, ${elenchiEnv.reduce((a, x) => a + x.non_letti.length, 0)} elencate e non lette, in ${elenchiEnv.filter((x) => x.non_elencati.length || x.non_letti.length).length} repo su ${elenchiEnv.length}.`);
   L.push(`Regole (0.6-g, 0.6-i): versione GitHub (origin/<default>) di ogni repo; doc storici fuori dal giro (${[...historicalCount.values()].reduce((a, b) => a + b, 0)} doc tolti); repo del codice dalla mappa (mr.repos.yaml o per cartella); righe che raccontano la rimozione o il passato = storico, righe di esempio fuori; solo affermazioni path/command/env/endpoint/table/identifier con prova di deriva («causato da»: il nome c'era ed è sparito). Le altre ${appendix.length} sono in appendice, non conteggiate.`, '');
   if (excluded.length) L.push(`Esclusi: ${excluded.map(([s, m]) => `\`${s}\` (${m})`).join(', ')}.`, '');
   if (o.senzaPr) L.push('PR aperte: non lette (`--senza-pr`).', '');
   else {
     L.push(`PR aperte: ${inCorrezione.length} segnalazioni su doc già toccati da una PR aperta, elencate in «Già in correzione»: non sono tra le prodotte, e \`--precisione\` le conta come confermate in una riga separata.`);
     if (prNotes.size) L.push(`PR non lette per ${prNotes.size} repo (comportamento come prima, segnalazioni contate): ${[...prNotes].map(([k, v]) => `${k} — ${v}`).join('; ')}.`);
+    if (redirect.size) L.push(`Remote origin sul nome vecchio per ${redirect.size} repo (spostati su GitHub; PR lette con il nome attuale): ${[...redirect].map(([k, v]) => `${k} — \`${v.da}\` → \`${v.a}\``).join('; ')}. Da aggiornare nel repo: \`git remote set-url origin https://github.com/<nome attuale>.git\`.`);
     L.push('');
   }
   if (notes.length) L.push('Note:', '', ...notes.map((n) => `- ${n}`), '');
@@ -573,7 +563,7 @@ function runGiro(o) {
   L.push('## Riepilogo', '');
   L.push(`Colonna «esito»: la compila il coordinatore con ${ESITI.map((e) => `\`${e}\``).join(', ')}. \`node tools/mr/giro.mjs --precisione\` dà due numeri: (confermate + già in correzione) / (prodotte + già in correzione), e confermate / prodotte.`, '');
   L.push(`Segnalazioni prodotte: ${rows.length} · già in correzione: ${inCorrezione.length} (contate come confermate).`, '');
-  L.push('| id | workspace | repo | doc | affermazioni | severità | esito |', '|---|---|---|---|---|---|---|');
+  L.push('| id | workspace | repo | doc | affermazioni | peso | esito |', '|---|---|---|---|---|---|---|');
   for (const r of rows) L.push(`| ${cell(r.id)} | ${r.slug} | ${cell(r.repo)} | ${cell(r.doc)} | ${r.affermazioni} | ${r.severita} |  |`);
   if (inCorrezione.length) {
     L.push('', '## Già in correzione (contate come confermate)', '', 'Il doc è toccato da una PR aperta sul suo repo: la correzione c\'è già, manca la merge. Sono derive vere: `--precisione` le conta come confermate, in una riga separata.', '');
@@ -583,13 +573,14 @@ function runGiro(o) {
   L.push('', '## Segnalazioni', '', ...blocks.flatMap((b) => [b, '']));
   L.push(...sezioneAncore(ancore, ancoreInPr, ancoreStat));
   L.push(...sezioneSalute(salute));
+  L.push(...sezioneEnv(elenchiEnv));
   L.push('## Appendice — non conteggiata', '', 'Affermazioni not_found senza prova di deriva (mai esistite nel codice, o vivono in un altro sistema), scartate da una regola (tra parentesi: storico, verbo «…» legato al nome, planned, negato, esempio, opzione) o di un tipo fuori dal giro (tipo). Non sono segnalazioni e non hanno esito.', '');
   const byDoc = new Map();
   for (const a of appendix) {
     if (!byDoc.has(a.id)) byDoc.set(a.id, []);
     byDoc.get(a.id).push(a);
   }
-  for (const [id, list] of byDoc) L.push(`- ${cell(id)}: ${list.map((a) => `${a.line} ${a.kind} \`${a.claim.replace(/`/g, "'")}\`${motivoBreve(a)}`).join(' · ')}`);
+  for (const [id, list] of byDoc) L.push(`- ${cell(id)}: ${list.map((a) => `${a.line} ${a.kind} \`${claimMostrabile(a.claim, a.doc, a.line).replace(/`/g, "'")}\`${motivoBreve(a)}`).join(' · ')}`);
   L.push('');
   const report = L.join('\n');
 
@@ -612,6 +603,16 @@ function runGiro(o) {
     console.log(`scritto: ${relative(process.cwd(), file)} (${rows.length} segnalazioni)`);
   } else {
     console.log(report);
+  }
+  // indice dei doc (0.6-z17): solo da un giro completo che scrive il suo report, così un giro parziale
+  // non lascia un indice con metà dei workspace
+  if ((o.out || o.write) && !o.only.length && !o.exclude.length && !o.senzaIndice) {
+    try {
+      const r = costruisciIndice(all, { ignoreDir: o.ignoreDir || null, workspaceRepos });
+      console.log(`indice dei doc: ${scriviIndice(r.voci)} (${r.voci.length} doc; \`mr trova <parole>\`)`);
+    } catch (err) {
+      console.error(`indice dei doc non scritto: ${String(err.message).split('\n')[0]}`);
+    }
   }
   return 0;
 }
@@ -643,6 +644,28 @@ export function sezioneSalute(salute, maxProblemi = 60) {
   if (tutti.length) {
     L.push('', `Problemi nei doc con frontmatter${tutti.length > maxProblemi ? ` (i primi ${maxProblemi} su ${tutti.length})` : ''}:`, '', ...tutti.slice(0, maxProblemi));
   }
+  L.push('');
+  return L;
+}
+
+/**
+ * sezione «Elenchi env» (0.6-z9): per repo, variabili lette dal codice e non elencate, elencate e non
+ * lette (mr env). Non sono segnalazioni e non entrano nella precisione.
+ */
+export function sezioneEnv(elenchi, maxNomi = 15) {
+  const L = ['## Elenchi env (conteggio a parte)', ''];
+  const ne = elenchi.reduce((a, x) => a + x.non_elencati.length, 0);
+  const nl = elenchi.reduce((a, x) => a + x.non_letti.length, 0);
+  L.push(`Repo con codice che legge variabili o con un file d'esempio: ${elenchi.length} · letti e non elencati: ${ne} · elencati e non letti: ${nl}.`, '');
+  L.push('Come `mr env <repo>`: i nomi letti dal codice (process.env, Deno.env.get, os.environ, file di configurazione, `${X}` dei compose) contro l\'elenco. L\'elenco sono i file d\'esempio del repo (.env*.example); senza, i doc vivi del workspace. Non sono segnalazioni e `--precisione` non le conta. Chi agisce: l\'agente del workspace, con `mr env` sul suo repo; un nome voluto fuori elenco va in `env_ignore` di mr.coverage.yaml o come `env:` in mr.claims.ignore.', '');
+  L.push('| workspace | repo | elenco | letti | letti e non elencati | di cui citati in un doc | elencati e non letti |', '|---|---|---|---|---|---|---|');
+  const rows = [...elenchi].sort((a, b) => (b.non_elencati.length + b.non_letti.length) - (a.non_elencati.length + a.non_letti.length) || a.slug.localeCompare(b.slug));
+  for (const x of rows) L.push(`| ${x.slug} | ${cell(x.repo)} | ${x.elenco === 'doc' ? 'doc vivi' : cell(x.esempi.join(', '))} | ${x.letti} | ${x.non_elencati.length} | ${x.non_elencati.filter((y) => y.nota).length} | ${x.non_letti.length} |`);
+  const righe = rows.filter((x) => x.non_elencati.length || x.non_letti.length).map((x) => {
+    const elenca = (xs) => xs.slice(0, maxNomi).map((y) => `\`${y.nome}\``).join(', ') + (xs.length > maxNomi ? ` (+${xs.length - maxNomi})` : '');
+    return `- ${cell(`${x.slug}/${x.repo}`)}: ${[x.non_elencati.length ? `non elencati ${elenca(x.non_elencati)}` : '', x.non_letti.length ? `non letti ${elenca(x.non_letti)}` : ''].filter(Boolean).join(' · ')}`;
+  });
+  if (righe.length) L.push('', 'Nomi, per repo:', '', ...righe);
   L.push('');
   return L;
 }

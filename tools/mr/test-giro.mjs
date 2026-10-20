@@ -46,6 +46,8 @@ function assert(c, m) {
 }
 
 console.log('\ntest-giro.mjs\n');
+// il giro con --write riscrive anche l'indice dei doc (0.6-z17): nei test mai quello vero in ~/.mr/indice
+process.env.MR_INDICE_DIR = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'mr-indice-'));
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'mr-giro-')));
 const ws = join(base, 'ws');
 // app: primo commit con src/tolto.ts e nome_tolto, secondo commit li toglie (prova di deriva)
@@ -258,8 +260,13 @@ test('--out: scrive nel file indicato, mai sopra un file esistente', () => {
   assert(b.status === 2 && b.stderr.includes('non sovrascrive'), `atteso exit 2, ottenuto ${b.status}`);
 });
 
+test('report (0.6-z10): riga «MR segnala, non blocca» in testa, colonna peso, «Quando» nelle segnalazioni', () => {
+  assert(out.split('\n').slice(0, 4).some((l) => l.includes('MR segnala, non blocca')), 'riga in testa');
+  assert(out.includes('| affermazioni | peso | esito |') && out.includes('**Quando:** dopo la task in corso'), 'peso o quando');
+});
+
 test('precisione: confermate / prodotte, colonna esito', () => {
-  const t = out.replace('| ws/app/docs/a.md | ws | app | docs/a.md | 2 | media |  |', '| ws/app/docs/a.md | ws | app | docs/a.md | 2 | media | confermata |')
+  const t = out.replace('| ws/app/docs/a.md | ws | app | docs/a.md | 2 | medio |  |', '| ws/app/docs/a.md | ws | app | docs/a.md | 2 | medio | confermata |')
     + '\n';
   const extra = '## Riepilogo\n\n| id | workspace | repo | doc | affermazioni | severità | esito |\n|---|---|---|---|---|---|---|\n| x/y/b.md | x | y | b.md | 1 | bassa | scartata |\n| x/y/c.md | x | y | c.md | 1 | bassa |  |\n';
   const p = precisione([t, extra]);

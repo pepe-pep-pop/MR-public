@@ -89,7 +89,7 @@ correggere il doc oppure di confermarlo con `verify --write`.
 ```bash
 node tools/mr/mr.mjs impact --staged          # prima del commit: quali doc citano o ancorano ciò che cambi
 node tools/mr/mr.mjs impact HEAD~3..HEAD      # su un intervallo
-node tools/mr/mr.mjs impact --staged --fail   # per un hook: exit 1 solo se è toccata un'ancora
+node tools/mr/mr.mjs impact --staged --fail   # per un hook: exit 1 solo se è toccata un'ancora (senza --fail, sempre 0: MR segnala, non blocca)
 ```
 
 `impact` guarda i token cambiati, non le righe: un nome conta se cambia lui. Le modifiche al solo
@@ -151,4 +151,5 @@ skill `mr-query` traduce le domande («cosa dipende da X?», «cosa leggo per pr
 - **Regole descritte solo a parole**, senza nominare file o funzioni: si collegano con un'ancora. Non
   esiste un «collegamento per concetto», perché non sarebbe deterministico.
 - **Tutto ciò che il doc non nomina.** Per i punti d'ingresso del codice (funzioni, route, migration,
-  CI, deploy, env) che nessun doc cita c'è `mr coverage`.
+  CI, deploy, env) che nessun doc cita c'è `mr coverage`. Per le variabili d'ambiente lette dal codice
+  e assenti dall'elenco (o elencate e mai lette) c'è `mr env`.

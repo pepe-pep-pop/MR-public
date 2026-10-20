@@ -37,7 +37,15 @@
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, relative, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import matter from 'gray-matter';
+import grayMatter from 'gray-matter';
+
+// 0.6-z13 (R1, report/sicurezza-2026-10-18.md): con le opzioni di default gray-matter passa a `eval`
+// un frontmatter che si apre con `---js` o `---javascript`. Qui il frontmatter è solo YAML (o JSON):
+// gli altri linguaggi diventano un frontmatter non leggibile, e nessun codice del doc viene eseguito.
+const rifiutaJs = () => { throw Object.assign(new Error('frontmatter in JavaScript non ammesso: solo YAML'), { jsVietato: true }); };
+export const MATTER_OPZIONI = Object.freeze({ engines: { js: rifiutaJs, javascript: rifiutaJs } });
+const matter = (raw) => grayMatter(raw, MATTER_OPZIONI);
+matter.stringify = (content, data) => grayMatter.stringify(content, data, MATTER_OPZIONI);
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 import { collectMarkdownArgs, findRepoRoot } from '../lib/discover.mjs';
@@ -221,7 +229,8 @@ function validate(mdFiles, baseDir, profile = 'full', erroriExtra = []) {
     } catch (e) {
       // 0.6-z3: un doc MR con il frontmatter rotto è un errore, non un doc in meno nel conteggio
       report.saltati++;
-      if (bloccoMr(raw)) report.error(rel, testoIlleggibile(e, true));
+      // un frontmatter in JavaScript è sempre un errore: nei doc nessuno lo scrive per caso (R1)
+      if (bloccoMr(raw) || e.jsVietato) report.error(rel, testoIlleggibile(e, true));
       else report.warn(rel, testoIlleggibile(e, false));
       continue;
     }

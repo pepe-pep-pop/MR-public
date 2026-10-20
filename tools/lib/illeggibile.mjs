@@ -39,6 +39,8 @@ export function messaggioParser(err) {
 
 /** testo dell'errore o del warning, uguale per validatore, scanner e giro */
 export function testoIlleggibile(err, mr) {
+  // 0.6-z13 (R1): frontmatter in JavaScript (`---js`), rifiutato senza eseguirlo
+  if (err && err.jsVietato) return 'frontmatter in JavaScript (`---js`): non eseguito e non letto, il doc è saltato. MR legge solo frontmatter YAML tra `---`';
   return mr
     ? `frontmatter non leggibile (${messaggioParser(err)}): il doc è saltato. Un valore con i due punti va tra virgolette, es. title: "PB: piano"`
     : `frontmatter non leggibile (${messaggioParser(err)}), senza mr_version: forse di un altro strumento, saltato`;

@@ -247,6 +247,21 @@ test('frontmatter non leggibile (0.6-z3): un doc MR rotto è segnalato con la ri
   assert(/Frontmatter non leggibile: +2 \(di doc MR: 1; saltati, non nel registry\)/.test(r.out), 'riepilogo assente');
 });
 
+test('frontmatter `---js` (0.6-z13, R1): né l\'anteprima né computeContentHash eseguono il codice del doc', () => {
+  const d = realpathSync(mkdtempSync(join(tmpdir(), 'mr-scanner-js-')));
+  const segno = join(d, 'ESEGUITO');
+  write(join(d, 'docs/js.md'), `---js\n({ mr_version: '0.6', id: 'prova/js', x: require('fs').writeFileSync(${JSON.stringify(segno)}, '1') })\n---\n\n# js\n`);
+  const r = run(d, d);
+  // computeContentHash è asincrona: la si prova in un processo a parte
+  const h = spawnSync(process.execPath, ['--input-type=module', '-e',
+    `import { computeContentHash } from ${JSON.stringify(SCANNER)}; computeContentHash(${JSON.stringify(join(d, 'docs/js.md'))}).then(() => console.log('letto'), (e) => console.log(e.message));`], { encoding: 'utf-8' });
+  const eseguito = existsSync(segno);
+  rmSync(d, { recursive: true, force: true });
+  assert(!eseguito, 'il codice del frontmatter è stato eseguito');
+  assert(r.code === 0 || r.code === 1, `exit ${r.code}: ${r.out.slice(0, 800)}`);
+  assert(/JavaScript non ammesso/.test(h.stdout), `computeContentHash: ${h.stdout} ${h.stderr}`);
+});
+
 const passed = results.filter(Boolean).length;
 console.log(`\nRisultato: ${passed}/${results.length} PASS`);
 process.exit(passed === results.length ? 0 : 1);

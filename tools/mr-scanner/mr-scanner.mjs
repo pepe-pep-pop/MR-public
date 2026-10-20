@@ -41,12 +41,20 @@
  *   - Mai propagare alla prima scansione (nessun hash di confronto)
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, lstat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { resolve, join, relative, basename, extname, dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import matter from 'gray-matter';
+import grayMatter from 'gray-matter';
+
+// 0.6-z13 (R1, report/sicurezza-2026-10-18.md): con le opzioni di default gray-matter passa a `eval`
+// un frontmatter che si apre con `---js` o `---javascript`. Qui il frontmatter è solo YAML (o JSON):
+// gli altri linguaggi diventano un frontmatter non leggibile, e nessun codice del doc viene eseguito.
+const rifiutaJs = () => { throw Object.assign(new Error('frontmatter in JavaScript non ammesso: solo YAML'), { jsVietato: true }); };
+export const MATTER_OPZIONI = Object.freeze({ engines: { js: rifiutaJs, javascript: rifiutaJs } });
+const matter = (raw) => grayMatter(raw, MATTER_OPZIONI);
+matter.stringify = (content, data) => grayMatter.stringify(content, data, MATTER_OPZIONI);
 import { findRepoRoot, listMarkdownFiles, collectMarkdownArgs } from '../lib/discover.mjs';
 import { bloccoMr, testoIlleggibile } from '../lib/illeggibile.mjs';
 import { vociFerme, sogliaBacklog } from '../lib/backlog.mjs';
@@ -608,6 +616,8 @@ function normalizeDatesForStringify(data) {
  * @returns {Promise<void>}
  */
 export async function writeFileUpdates(filePath, updates) {
+  // 0.6-z13 (R3): --write non scrive attraverso un symlink
+  if ((await lstat(filePath)).isSymbolicLink()) throw new Error(`scrittura rifiutata: ${filePath} è un symlink`);
   const raw = await readFile(filePath, 'utf-8');
   const parsed = matter(raw);
   const merged = normalizeDatesForStringify({ ...parsed.data, ...updates });

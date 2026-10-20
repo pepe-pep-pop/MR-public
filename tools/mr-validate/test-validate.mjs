@@ -14,7 +14,7 @@
 import { spawnSync, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -299,6 +299,23 @@ test('mr.redazioni (0.6-z8): uno sha che non esiste nel repo è un errore del va
   rmSync(d, { recursive: true, force: true });
   assert(r.code === 1 && /mr\.redazioni: riga 2: lo sha import «0c40919» non esiste nel repo/.test(r.out), r.out.slice(0, 1500));
   assert(ok.code === 0 && !/mr\.redazioni:/.test(ok.out), 'sha valido: nessun errore');
+});
+
+test('frontmatter `---js` (0.6-z13, R1): mai eseguito, è un frontmatter non leggibile', () => {
+  const d = mkdtempSync(join(tmpdir(), 'mr-validate-js-'));
+  const segno = join(d, 'ESEGUITO');
+  // prima della z13 gray-matter passava questo blocco a eval e il file ESEGUITO compariva
+  const corpo = `({ mr_version: '0.6', id: 'prova/js', title: 'x', type: 'reference', owner: 'x', created: '2026-01-01', last_updated: '2026-01-01', x: require('fs').writeFileSync(${JSON.stringify(segno)}, '1') })`;
+  writeFileSync(join(d, 'js.md'), `---js\n${corpo}\n---\n\n# js\n`);
+  writeFileSync(join(d, 'javascript.md'), `---javascript\n${corpo}\n---\n\n# js\n`);
+  writeFileSync(join(d, 'maiuscolo.md'), `---JS\n${corpo}\n---\n\n# js\n`);
+  // un doc valido accanto: con soli doc illeggibili il validatore dice «nessun file con header MR»
+  writeFileSync(join(d, 'ok.md'), `---\nmr_version: '0.6'\nid: prova/ok\ntitle: ok\ntype: reference\nowner: x\nstatus: active\ncreated: '2026-01-01'\nlast_updated: '2026-01-01'\n---\n\n# ok\n`);
+  const r = run('--profile', 'light', d);
+  const eseguito = existsSync(segno);
+  rmSync(d, { recursive: true, force: true });
+  assert(!eseguito, 'il codice del frontmatter è stato eseguito');
+  assert(r.code === 1 && /js\.md: frontmatter in JavaScript \(`---js`\): non eseguito/.test(r.out) && /\|  3 saltati/.test(r.out), r.out.slice(0, 1500));
 });
 
 const passed = results.filter(Boolean).length;

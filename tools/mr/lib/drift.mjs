@@ -101,6 +101,21 @@ export function redactLine(line) {
   return line.replace(EMAIL, '[email]').replace(PHONE_IT, '[telefono]');
 }
 
+// 0.6-z13 (R2, report/sicurezza-2026-10-18.md): il testo di un'affermazione nei report
+export const CLAIM_MAX = 120;
+
+/**
+ * Testo di un'affermazione come si stampa nei report (md, json, segnalazioni, giro): oscurato come le
+ * righe di diff e tagliato a CLAIM_MAX caratteri. Se sembra un segreto non si stampa: al suo posto
+ * «possibile segreto in <doc>:<riga>», da sistemare subito (eccezione 1 di «MR segnala, non blocca»).
+ */
+export function claimMostrabile(text, doc, line) {
+  const t = String(text ?? '');
+  const r = redactLine(' ' + t).slice(1);
+  if (r.includes('[riga omessa: possibile segreto]')) return `possibile segreto in ${doc}:${line}`;
+  return r.length > CLAIM_MAX ? `${r.slice(0, CLAIM_MAX - 1)}…` : r;
+}
+
 function globToRegex(glob) {
   let re = '';
   for (let i = 0; i < glob.length; i++) {

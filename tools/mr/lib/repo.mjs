@@ -6,7 +6,8 @@
  * repo degli altri workspace (regole dell'agente, CLAUDE.md).
  *
  * Sicurezza (PRD v0.6 N4):
- *   - non si leggono mai `.env*` (eccetto .env.example/.sample/.template), `*.pem`,
+ *   - non si leggono mai `.env*` (eccetto i file d'esempio: .env.example/.sample/.template/.esempio,
+ *     anche .env.<nome>.example dalla 0.6-z9), `*.pem`,
  *     `*.key`, file con SECRET o SEGRETI nel nome: readFile li rifiuta. Dalla 0.6-z5 (decisione
  *     di il maintainer) fanno eccezione i doc markdown (`.md`, `.mdx`): un doc che parla di segreti,
  *     come `D22-secret-in-chiaro.md`, si legge come gli altri;
@@ -14,12 +15,13 @@
  *     solo path e numero di riga.
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve, relative, sep } from 'node:path';
+import { gitSicuro } from '../../lib/git-sicuro.mjs';
+import { existsSync, readFileSync, statSync, lstatSync, realpathSync, writeFileSync } from 'node:fs';
+import { join, resolve, relative, sep, isAbsolute } from 'node:path';
 import { findRepoRoot, hasExcludedSegment } from '../../lib/discover.mjs';
 
-const ENV_EXAMPLE = /(^|\/)\.env\.(example|sample|template)$/;
+// 0.6-z9: anche .env.<nome>.example (.env.production.example) e .esempio: file d'esempio, senza valori
+const ENV_EXAMPLE = /(^|\/)\.env\.([A-Za-z0-9_-]+\.)?(example|sample|template|esempio)$/;
 
 /** true se il path non va mai letto (segreti) */
 export function isSecretPath(relPath) {
@@ -29,6 +31,18 @@ export function isSecretPath(relPath) {
   if (/\.(pem|key)$/i.test(base)) return true;
   if (/SECRET|SEGRETI/i.test(base) && !/\.mdx?$/i.test(base)) return true;
   return false;
+}
+
+/**
+ * Scrittura di un doc dentro il repo (0.6-z13, R3 di report/sicurezza-2026-10-18.md): rifiutata se il
+ * doc è un symlink o se il suo path reale esce dal repo, così `--write` non scrive mai altrove.
+ */
+export function scriviNelRepo(root, relPath, testo) {
+  const abs = resolve(root, relPath);
+  if (lstatSync(abs).isSymbolicLink()) throw new Error(`scrittura rifiutata: ${relPath} è un symlink`);
+  const rootReale = realpathSync(root);
+  if (!realpathSync(abs).startsWith(rootReale + sep)) throw new Error(`scrittura rifiutata: ${relPath} è fuori dal repo`);
+  writeFileSync(abs, testo, 'utf-8');
 }
 
 // Esclusioni della ricerca nel codice: doc, lockfile, cartelle di build, segreti.
@@ -102,7 +116,7 @@ export class RepoView {
   }
 
   git(args, opts = {}) {
-    return execFileSync('git', ['-C', this.root, ...args], {
+    return gitSicuro(this.root, [...args], {
       encoding: 'utf-8',
       maxBuffer: 256 * 1024 * 1024,
       stdio: ['ignore', 'pipe', opts.quiet === false ? 'inherit' : 'ignore'],
@@ -111,7 +125,7 @@ export class RepoView {
 
   /** come git(), con input su stdin */
   gitInput(args, input) {
-    return execFileSync('git', ['-C', this.root, ...args], {
+    return gitSicuro(this.root, [...args], {
       encoding: 'utf-8',
       input,
       maxBuffer: 512 * 1024 * 1024,
@@ -186,8 +200,10 @@ export class RepoView {
     const out = new Map();
     if (!this.rev) {
       for (const p of wanted) {
+        const reale = this.percorsoSicuro(p);
+        if (!reale) continue; // fuori dal repo o symlink verso un segreto (0.6-z13)
         try {
-          out.set(p, readFileSync(join(this.root, p), 'utf-8'));
+          out.set(p, readFileSync(reale, 'utf-8'));
         } catch {
           // file sparito nel frattempo: si salta
         }
@@ -195,7 +211,7 @@ export class RepoView {
       return out;
     }
     if (!wanted.length) return out;
-    const buf = execFileSync('git', ['-C', this.root, 'cat-file', '--batch'], {
+    const buf = gitSicuro(this.root, ['cat-file', '--batch'], {
       input: wanted.map((p) => `${this.rev}:${p}`).join('\n') + '\n',
       maxBuffer: 1024 * 1024 * 1024,
       stdio: ['pipe', 'pipe', 'ignore'],
@@ -234,9 +250,23 @@ export class RepoView {
     this._files = out
       .split('\0')
       .filter(Boolean)
-      .filter((p) => (this.rev ? true : existsSync(join(this.root, p))));
+      .filter((p) => (this.rev ? true : existsSync(join(this.root, p)) && this._nonSymlinkFuori(p)));
     this._fileSet = new Set(this._files);
     return this._visibleFiles();
+  }
+
+  /**
+   * 0.6-z13 (R3): nel working tree un symlink che esce dal repo o punta a un file con segreti non è
+   * un file del repo: sparisce dall'elenco, quindi nessun comando lo legge come doc o come codice.
+   * Con --rev git restituisce il testo del link, non il bersaglio: lì non serve.
+   */
+  _nonSymlinkFuori(p) {
+    try {
+      if (!lstatSync(join(this.root, p)).isSymbolicLink()) return true;
+    } catch {
+      return false;
+    }
+    return this.percorsoSicuro(p) !== null;
   }
 
   _visibleFiles() {
@@ -261,7 +291,8 @@ export class RepoView {
     this.listFiles();
     if (this._fileSet.has(relPath)) return true;
     // nel working tree contano anche i file presenti su disco ma ignorati (es. output di build)
-    return !this.rev && existsSync(join(this.root, relPath)) && statSync(join(this.root, relPath)).isFile();
+    const p = !this.rev && this.percorsoSicuro(relPath); // niente `..`, assoluti, symlink che escono (0.6-z13)
+    return !!p && existsSync(p) && statSync(p).isFile();
   }
 
   hasDir(relPath) {
@@ -275,7 +306,8 @@ export class RepoView {
       }
     }
     if (this._allDirs.has(clean)) return true;
-    return !this.rev && existsSync(join(this.root, clean)) && statSync(join(this.root, clean)).isDirectory();
+    const p = !this.rev && this.percorsoSicuro(clean);
+    return !!p && existsSync(p) && statSync(p).isDirectory();
   }
 
   /** true se git ignorerebbe il path (regole .gitignore attuali) */
@@ -288,11 +320,35 @@ export class RepoView {
     }
   }
 
-  /** legge un file (rifiuta i file con segreti) */
+  /**
+   * Path assoluto del working tree da leggere, o null (0.6-z13, R3). Rifiuta i path assoluti e con
+   * `..`; se il path è un symlink (o passa da una cartella symlink), il bersaglio reale deve restare
+   * nel repo e non essere un file con segreti. Un path che non esiste torna com'è: la lettura fallirà
+   * come prima.
+   */
+  percorsoSicuro(relPath) {
+    if (!relPath || isAbsolute(relPath) || relPath.split(/[\\/]/).includes('..')) return null;
+    const abs = join(this.root, relPath);
+    let reale;
+    try {
+      reale = realpathSync(abs);
+    } catch {
+      return abs;
+    }
+    if (!this._rootReale) this._rootReale = realpathSync(this.root);
+    if (reale !== this._rootReale && !reale.startsWith(this._rootReale + sep)) return null;
+    const relReale = relative(this._rootReale, reale).split(sep).join('/');
+    if (relReale !== relPath && isSecretPath(relReale)) return null;
+    return reale;
+  }
+
+  /** legge un file (rifiuta i file con segreti e, nel working tree, i path che escono dal repo) */
   readFile(relPath) {
     if (isSecretPath(relPath)) throw new Error(`lettura rifiutata (file con segreti): ${relPath}`);
     if (this.rev) return this.git(['show', `${this.rev}:${relPath}`]);
-    return readFileSync(join(this.root, relPath), 'utf-8');
+    const p = this.percorsoSicuro(relPath);
+    if (!p) throw new Error(`lettura rifiutata (fuori dal repo o symlink verso un file con segreti): ${relPath}`);
+    return readFileSync(p, 'utf-8');
   }
 
   /** .md sotto un prefisso, con le esclusioni di default (per l'uso con --rev) */

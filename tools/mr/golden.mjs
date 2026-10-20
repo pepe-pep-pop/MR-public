@@ -25,7 +25,7 @@
  * Exit code: 0 eseguito, 2 errore (cases mancanti, repo assente).
  */
 
-import { execFileSync } from 'node:child_process';
+import { gitSicuro } from '../lib/git-sicuro.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,7 +53,7 @@ function parseArgs(argv) {
 
 /** token tra backtick sulle righe tolte dal doc_commit nel doc */
 function removedTokens(repo, docCommit, doc) {
-  const diff = execFileSync('git', ['-C', repo.root, 'diff', '-U0', `${docCommit}^`, docCommit, '--', doc], {
+  const diff = gitSicuro(repo.root, ['diff', '-U0', `${docCommit}^`, docCommit, '--', doc], {
     encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024,
   });
   const removed = new Set();
@@ -80,7 +80,7 @@ function externalsAt(reposRoot, c, view, rev) {
   const date = view.git(['show', '-s', '--format=%cI', rev]).trim();
   const views = list.map((rel) => {
     const root = join(reposRoot, rel);
-    const at = execFileSync('git', ['-C', root, 'rev-list', '-1', `--before=${date}`, 'HEAD'], { encoding: 'utf-8' }).trim();
+    const at = gitSicuro(root, ['rev-list', '-1', `--before=${date}`, 'HEAD'], { encoding: 'utf-8' }).trim();
     return at ? new RepoView(root, at) : null;
   }).filter(Boolean);
   return () => views;

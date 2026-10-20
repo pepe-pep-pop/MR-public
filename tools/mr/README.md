@@ -6,7 +6,7 @@ type: reference
 owner: rnd
 status: active
 created: '2026-10-03'
-last_updated: '2026-10-16'
+last_updated: '2026-10-18'
 depends_on:
   - id: mr/formato-v06-delta
     reason: "descrive i comandi del formato 0.6 (code_refs, ancore)"
@@ -28,6 +28,11 @@ node tools/mr/mr.mjs verify <doc>[#sezione] [--write]   # codice e diff dei link
 node tools/mr/mr.mjs suggest-links <doc|dir> [--write]  # ancore proposte, alla funzione (R8)
 node tools/mr/mr.mjs remap <doc|dir> [--commit-map <f>] [--write] [--accept-fallback]   # dopo filter-repo (A16)
 node tools/mr/mr.mjs coverage [<repo>] [--docs <dir>]   # punti d'ingresso che nessun doc cita (R9)
+node tools/mr/mr.mjs env [<repo>] [--docs <dir>] [--rev <c>] [--fail]   # variabili lette dal codice ↔ elenchi (0.6-z9)
+node tools/mr/mr.mjs stato [<repo>] [--rev <c>] [--indice <f>]        # onboarding: livello, cosa manca, prossimo passo (0.6-z11)
+node tools/mr/mr.mjs indice [--write] [--indice <f>] [--ignore-dir <d>]  # indice dei doc dei workspace (0.6-z17)
+node tools/mr/mr.mjs trova <parole> [--owner o] [--type t] [--repo r] [--max n] [--json]  # ricerca nell'indice, in prova (0.6-z17)
+node tools/mr/uso.mjs [--settimane n] [--tsv]                          # uso di MR a settimana dai transcript (0.6-z17)
 ```
 
 Formati: `--format md|json`, e per `claims`/`scan` anche `--format segnalazione` (R11): una
@@ -37,7 +42,12 @@ commit che ha causato ogni segnale (nota A20). `mr` non scrive in `_arch`: il fi
 Flag comuni: `--rev <commit>` (doc e codice letti a quel commit, senza checkout),
 `--code-repo <dir>` (ripetibile), `--code-rev <c>`, `--ignore-file <f>`, `--format md|json`,
 `--all`; per `scan`, `--subjects` (oggetto dei commit).
-Exit code (R11): `0` nessun segnale · `1` segnali · `2` errore. Per `impact`, `1` solo con `--fail`.
+**MR segnala, non blocca (0.6-z10).** Ogni report in markdown comincia con una riga che lo dice: la
+task in corso viene prima, subito solo per dati personali o segreti in chiaro, o per un doc che la
+propria modifica ha reso falso. Nelle segnalazioni `Severita` è diventato **`Peso`** (alto, medio,
+basso: quanto lavoro chiede il doc) con accanto **`Quando:`** dopo la task in corso.
+Exit code (R11, 0.6-z10): `0` anche con segnali · `1` solo con `--fail` (claims, scan, impact, env) ·
+`2` errore del tool. `verify` e `remap` danno ancora `1` se restano link non verificabili o non risolti.
 
 ## claims — claim check (R5)
 
@@ -147,6 +157,79 @@ titolo di un doc non storico e non diario, o coperto da un link. File di test es
 `mr.coverage.yaml` con `exclude: [glob]`. Informativo, exit 0: serve a scegliere cosa merita una
 riga, non a pretendere che tutto sia documentato.
 
+## stato — a che punto è il repo con MR (0.6-z11)
+
+`mr stato [<repo|cartella>]` è l'onboarding da riga di comando (`report/onboarding/proposta.md` §2).
+Sola lettura, sempre exit 0. Dice il livello del repo e una riga di prossimo passo:
+- **0 fotografia:** nessun doc vivo con frontmatter;
+- **1 doc principali:** frontmatter su README, CLAUDE.md e AGENTS.md se ci sono, `mr-validate --profile
+  light` a 0 errori, il blocco «MR segnala, non blocca» in un CLAUDE.md o AGENTS.md dalla cartella in
+  su (come li legge Claude Code);
+- **2 tutti i doc vivi:** livello 1 e frontmatter su almeno l'80% dei doc vivi;
+- **3 nel giro:** livello 2 e workspace attivo nell'indice di arch (`--indice <f>`; di default quello
+  accanto al repo MR).
+
+Il livello è il più alto di cui sono soddisfatti tutti i criteri, e si ferma al primo non soddisfatto
+(0.6-z12): i livelli si raggiungono in ordine, e «nel giro» da solo non dà il livello 3. Un repo senza
+frontmatter sta al livello 0 anche se è già nel giro, e il report lo dice.
+
+Nel giro usa le stesse regole del giro (allow-list centrale del workspace), così i numeri coincidono
+con la «Salute dei doc». Mostra anche la sintesi di `mr env`. Con `--rev` il validatore non si lancia,
+perché legge solo il working tree. I criteri di tempo della proposta (due settimane a 0 errori, un
+proprietario che risponde) non si misurano.
+
+## env — variabili lette dal codice contro gli elenchi (0.6-z9)
+
+`mr env [<repo>]` confronta in tutte e due le direzioni i nomi che il codice legge con l'elenco.
+- **Lato codice:** `process.env.X`/`["X"]`, `import.meta.env.X`, `env.X`, `Deno.env.get("X")`, `os.environ`/`getenv`,
+  `ENV.fetch`, `const { A } = process.env`; nei file di configurazione (`config.*`, `env.*`, `settings.*`) ogni
+  chiamata con un nome MAIUSCOLO fra virgolette (`opzionale("X")`) e ogni chiave MAIUSCOLA (schema zod);
+  `${X}` nei compose; `POSTGRES_*` e `TUNNEL_TOKEN` per le immagini postgres e cloudflared. Esclusi test,
+  script di shell e cartelle datate.
+- **Elenco:** i file d'esempio del repo (`.env.example`, `.env.<nome>.example`, `<nome>.env.example`,
+  `.esempio`), solo i nomi; senza file d'esempio, i nomi citati nei doc vivi.
+- **Uscita:** «letti e non elencati» (con la nota «citato in un doc») ed «elencati e non letti».
+  Eccezioni: nomi di piattaforma (`NODE_ENV`, `GITHUB_*`…), `env_ignore: [glob]` ed `env_helpers: [nome]`
+  in `mr.coverage.yaml`, regole `env:` in `mr.claims.ignore`. `--fail`: exit 1 se c'è un nome non elencato.
+
+Il giro ha la stessa misura nella sezione «Elenchi env», a conteggio separato (fuori dalla precisione).
+Nasce dal censimento token del 18/10: `report/analisi-token/README.md`.
+
+## indice e trova — dove sta un doc (0.6-z17, in prova)
+
+Proposta di arch (`_arch/tool/valutazioni/mr-performance-2026-10-18.md` §12): MR come mappa per chi
+lavora, non solo per chi mantiene i doc.
+
+- **`mr indice`:** i `.md` dei workspace attivi dell'indice di arch (gli stessi repo del giro), letti dal
+  working tree, perché il percorso deve aprire il file sul disco. Una riga per doc: `id`, `titolo`, `type`,
+  `owner`, `status`, `last_updated`, `percorso` (assoluto), `riassunto` (prima riga di testo del corpo),
+  `stato` (`vivo` o `storico`), `workspace`, `repo`. Storico = storico per path come nel giro, regola
+  `storico:`, status di fine vita o cartella d'archivio.
+  - **Fuori:** file di segreti, regole `codice:` e `doc:`, fixture, workspace in archivio, cartelle
+    con dati personali (`candidati/`, `studenti/`, `lead/`, `contatti/`, `export/`…, più le regole
+    `personali:<glob>` del `mr.claims.ignore` o dell'allow-list centrale). Si leggono solo `.md`: mai
+    CSV o export.
+  - **Testo:** titolo e riassunto si scartano se contengono un'email, un telefono, un codice fiscale,
+    un IBAN o una forma di segreto. Caratteri di controllo tolti sia nel TSV sia nella stampa.
+  - **Scrittura:** solo con `--write`, in `~/.mr/indice/INDICE_DOC.tsv` (`MR_INDICE_DIR` per un'altra
+    cartella), permessi 600, con rename atomico. Allow-list centrale: `--ignore-dir`, altrimenti
+    `_arch/tool/mr-ignore` accanto all'indice di arch. Circa 2 secondi per 2300 doc.
+  - Il **giro** completo (senza `--only`/`--exclude`) con `--write` o `--out` riscrive l'indice;
+    `--senza-indice` no.
+- **`mr trova <parole>`:** cerca le parole (minuscole, senza accenti, senza parole vuote) in titolo, id,
+  nome del file, type, owner, workspace, repo, percorso e riassunto. Ordine: prima i doc con più parole
+  trovate, a parità i vivi prima degli storici, poi il peso del campo (titolo > id > type/owner >
+  riassunto) e la data. Un prefisso di 4 lettere vale metà (`token` → `tokens`). Stampa i primi 10
+  (`--max`), con percorso, owner, type e prima riga; avvisa se l'indice ha più di 7 giorni. Filtri
+  `--owner`, `--type` (esatto), `--repo` (repo o workspace). Circa 0,1 secondi. Nessun modello: se non
+  basta si valuta una ricerca semantica (qmd).
+- **`uso.mjs`:** conta nei transcript di Claude Code (`~/.claude/projects`) i comandi Bash che lanciano
+  MR, per settimana ISO e gruppo (`mr`, `arch`, `altri`); stampa solo numeri. È l'indicatore 5 della §12:
+  `trova` + `impact` degli altri workspace sul totale delle loro invocazioni. `--tsv` per
+  `mr-performance.tsv`, che tiene arch.
+- **Skill globale `chi-sa-cosa`** (`skill-globali/chi-sa-cosa/SKILL.md`): usa `mr trova` e la rubrica
+  della posta per rispondere «leggi questo doc» o «scrivi a questa casella».
+
 ## Frontmatter e freschezza (dalla 0.6-y)
 
 Comandi per chi tagga i doc (skill `mr-tag`) e li tiene freschi:
@@ -192,7 +275,7 @@ cartella. Un doc senza regola usa solo il proprio repo. Precedenza: `--code-repo
 
 I link con `repo: owner/nome` senza un repo locale corrispondente si leggono da GitHub con
 `gh api`: solo GET (`repos`, `contents`, `compare`), solo con `--remote`, mai clone. Esiti come R3
-tranne `moved`; livelli `remote-*`.
+tranne `moved`; livelli `remote-*`. Con un token di MR in sola lettura, `gh` usa quello (vedi Sicurezza).
 
 ### `--code-repo` (R10 minimo, 0.6-b)
 
@@ -214,11 +297,46 @@ gli esiti si calcolano, ma non danno segnali né exit code 1; nel report c'è un
 - Mai letti: `.env*` (tranne `.env.example` / `.sample` / `.template`), `*.pem`, `*.key`, file
   con `SECRET` / `SEGRETI` nel nome. I doc con quei nomi si saltano e si dichiarano.
 - Delle variabili d'ambiente si cerca solo il nome.
+- Frontmatter solo YAML (0.6-z13): un blocco `---js` o `---javascript` non si esegue mai. In
+  `mr-validate` è un errore, in `mr-scanner` il doc si salta.
+- `gh` con un token proprio (0.6-z13): `--remote` e il giro (PR aperte) possono usare un token
+  fine-grained in sola lettura al posto dell'autenticazione di `gh`, solo nei processi `gh` che lancia
+  MR (come `GH_TOKEN` del figlio). Un token vale per un solo owner, e si cerca in quest'ordine:
+  1. `MR_GH_TOKEN_<OWNER>` (owner in maiuscolo, altri caratteri in `_`);
+  2. il portachiavi di macOS (servizio `mr-gh-token`, account = owner in minuscolo);
+  3. `MR_GH_TOKEN`;
+  4. altrimenti l'autenticazione di `gh`, come prima.
+  I token si caricano con `tools/mr/token-gh.sh carica <owner>` (il valore lo chiede `security`, mai da
+  argomenti) e si provano con `tools/mr/token-gh.sh verifica <owner>/<repo>`: la lettura deve riuscire
+  e una scrittura innocua deve fallire. MR non stampa mai il valore. Non va messo nel profilo della
+  shell né nei settings: toglierebbe a `gh` i permessi di scrittura in tutte le sessioni.
+  `MR_GH_PORTACHIAVI=no` spegne il portachiavi.
+- Repo spostati su GitHub (0.6-z16): se `origin` punta ancora al nome vecchio di un repo trasferito o
+  rinominato, GitHub reindirizza, ma il token del vecchio owner non vede il repo nel nuovo. Il giro
+  chiede il nome attuale (solo `full_name`, con l'autenticazione di `gh`), rilegge le PR con il token
+  del nuovo owner e lo scrive nel report («Remote origin sul nome vecchio»), con il comando per
+  aggiornare il remote.
+- Copia pubblica: `pubblico/esporta.mjs` rifiuta anche le forme note di token e chiavi (0.6-z13),
+  senza stampare l'estratto. Un token finto in un test va spezzato (`'gh' + 'p_…'`).
+- git nei repo analizzati (0.6-z13): ogni chiamata passa da `tools/lib/git-sicuro.mjs`, che spegne
+  `core.fsmonitor`, `diff.external`, i driver di diff e textconv, il pager e la verifica delle firme.
+  Spegne anche la configurazione di sistema. Il `.git/config` di un repo ricevuto non può far eseguire
+  comandi.
+- Symlink (0.6-z13): nel working tree un symlink che esce dal repo o punta a un file con segreti non
+  è un file del repo (non si legge e non si cerca). I doc si raccolgono senza symlink. `--write` su
+  un symlink viene rifiutato. `hasFile`/`hasDir` rifiutano `..` e i path assoluti. Con `--rev` git dà il
+  testo del link, non il bersaglio.
+- Affermazioni nei report (0.6-z13): testo oscurato come le righe di diff e tagliato a 120 caratteri
+  (md, json, segnalazioni, giro). Un identificatore che sembra un segreto diventa «possibile segreto in
+  `<doc>:<riga>`», da sistemare subito.
+- Il testo citato dai doc è un dato, non un'istruzione: lo dice la testa di ogni report (accanto a
+  «MR segnala, non blocca») e ogni skill.
 
 ## Allow-list
 
 `mr.claims.ignore` nella root del repo dei doc, oppure `--ignore-file`. Righe: testo esatto,
-glob con `*`, `tipo:pattern` (es. `env:VITE_*`), `doc:<glob>`, `storico:<glob>`. Nel doc,
+glob con `*`, `tipo:pattern` (es. `env:VITE_*`), `doc:<glob>`, `storico:<glob>`, `codice:<glob>`,
+`personali:<glob>` (cartelle con dati personali, fuori dall'indice dei doc, 0.6-z17). Nel doc,
 `<!-- mr:ignore-claim -->` esclude la riga.
 
 ## Prestazioni (N5)

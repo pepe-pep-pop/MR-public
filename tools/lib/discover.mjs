@@ -20,8 +20,8 @@
  * esplicita di chi lancia il comando.
  */
 
-import { execFileSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { gitSicuro } from './git-sicuro.mjs';
+import { existsSync, readdirSync, statSync, lstatSync } from 'node:fs';
 import { join, resolve, relative, sep, extname } from 'node:path';
 
 export const DEFAULT_EXCLUDED_DIRS = ['node_modules', '.git', 'dist', 'build'];
@@ -58,9 +58,7 @@ export function hasExcludedSegment(relPath, extraExcluded = []) {
 function listViaGit(absDir, repoRoot, extraExcluded) {
   let out;
   try {
-    out = execFileSync(
-      'git',
-      ['-C', absDir, 'ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'],
+    out = gitSicuro(absDir, ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', '.'],
       { encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }
     );
   } catch {
@@ -73,6 +71,9 @@ function listViaGit(absDir, repoRoot, extraExcluded) {
     const abs = join(absDir, rel);
     // ls-files --cached elenca anche file cancellati dal working tree
     if (!existsSync(abs)) continue;
+    // 0.6-z13 (R3): niente symlink, come nel walk (Dirent.isFile() è falso per un link): un `.md`
+    // versionato che punta fuori dal repo o a un segreto non si legge
+    if (lstatSync(abs).isSymbolicLink()) continue;
     // difesa: niente file dentro repo annidati (git normalmente non li elenca)
     if (insideNestedRepo(abs, repoRoot)) continue;
     files.push(abs);

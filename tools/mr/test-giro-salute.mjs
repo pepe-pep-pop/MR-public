@@ -44,6 +44,8 @@ const oggi = new Date().toISOString().slice(0, 10);
 const base = { mr_version: '"0.6"', title: 'T', type: 'guide', owner: 'app', created: oggi, last_updated: oggi };
 
 console.log('\ntest-giro-salute.mjs\n');
+// il giro con --write riscrive anche l'indice dei doc (0.6-z17): nei test mai quello vero in ~/.mr/indice
+process.env.MR_INDICE_DIR = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'mr-indice-'));
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'mr-giro-salute-')));
 const app = join(root, 'ws', 'app');

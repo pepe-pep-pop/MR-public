@@ -10,11 +10,11 @@
  * Usato da tools/mr (date) e da mr-validate. Sola lettura: `git rev-parse` e `git cat-file`.
  */
 
-import { execFileSync } from 'node:child_process';
+import { gitSicuro } from './git-sicuro.mjs';
 
 function git(root, args) {
   try {
-    return { ok: true, out: execFileSync('git', ['-C', root, ...args], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() };
+    return { ok: true, out: gitSicuro(root, [...args], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() };
   } catch {
     return { ok: false, out: '' };
   }

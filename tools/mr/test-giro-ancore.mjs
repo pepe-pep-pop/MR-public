@@ -42,6 +42,8 @@ function assert(c, m) {
 }
 
 console.log('\ntest-giro-ancore.mjs\n');
+// il giro con --write riscrive anche l'indice dei doc (0.6-z17): nei test mai quello vero in ~/.mr/indice
+process.env.MR_INDICE_DIR = (await import('node:fs')).mkdtempSync((await import('node:path')).join((await import('node:os')).tmpdir(), 'mr-indice-'));
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), 'mr-giro-ancore-')));
 const app = join(base, 'ws', 'app');

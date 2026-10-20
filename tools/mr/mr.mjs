@@ -10,23 +10,29 @@
  *   mr remap <doc|dir> --commit-map <f> [--write]  verified riancorati dopo git filter-repo (A16)
  *   mr coverage [<repo>] [--docs <dir>]   punti d'ingresso del codice che nessun doc cita (R9)
  *   mr rivisto <doc> [--write] [--data d]  doc riletto e ancora vero: solo last_updated (0.6-y)
+ *   mr env [<repo>] [--docs <dir>] [--rev c]  variabili lette dal codice ↔ elenchi (0.6-z9)
+ *   mr stato [<repo>] [--indice <f>]           a che punto è il repo con MR e qual è il passo dopo (0.6-z11)
+ *   mr indice [--write]                        indice dei doc dei workspace in ~/.mr/indice/INDICE_DOC.tsv (0.6-z17)
+ *   mr trova <parole> [--owner o] [--type t] [--repo r]   i 10 doc più pertinenti dall'indice (0.6-z17, in prova)
  *
  * claims, scan, impact: sola lettura, sempre. verify, suggest-links, remap e rivisto scrivono SOLO con
- * --write e solo nei doc indicati; mai nel codice. Doc e codice si leggono via git (anche a
+ * --write e solo nei doc indicati; mai nel codice. `indice` scrive solo con --write e solo il suo TSV. Doc e codice si leggono via git (anche a
  * un commit, senza checkout). Nessuna rete, nessun LLM. Repo locali con --code-repo o
  * mr.repos.yaml (R10, note A5 e A9).
  *
- * Exit code (R11): 0 nessun segnale · 1 claim not_found, o link drift/moved/missing
- * (esclusi i doc storici, nota A7) · 2 errore del tool. `impact` dà 1 solo con --fail, e solo per
- * un'ancora toccata (0.6-t).
+ * Exit code (R11, 0.6-z10): 0 anche con segnali (MR segnala, non blocca) · 1 solo con --fail: claim
+ * not_found, o link drift/moved/missing (esclusi i doc storici, nota A7); per `impact` solo per
+ * un'ancora toccata (0.6-t); per `env` un nome non elencato · 2 errore del tool.
  * `scan` (0.6-p): in un doc con link contano solo i link; i claim restano nel report.
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { resolve, relative } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { resolve, relative, dirname, join } from 'node:path';
+import { homedir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { collectMarkdownArgs } from '../lib/discover.mjs';
-import { RepoView, isSecretPath } from './lib/repo.mjs';
+import { RepoView, isSecretPath, scriviNelRepo } from './lib/repo.mjs';
 import { checkDocs, loadIgnore, parseIgnore, codeExcludes, summarize, IGNORE_FILE } from './lib/claims.mjs';
 import { readCodeRefs } from './lib/coderefs.mjs';
 import { readFrontmatter, historicalReason, erroreFrontmatter } from './lib/frontmatter.mjs';
@@ -40,14 +46,18 @@ import { planVerify, textChanges, applyUpdates } from './lib/verify.mjs';
 import { parseCommitMap, planRemap } from './lib/remap.mjs';
 import { toSegnalazioni } from './lib/segnalazione.mjs';
 import { coverage } from './lib/coverage.mjs';
+import { livello, haRegola, nelGiro, SOGLIA_VIVI } from './lib/stato.mjs';
+import { parseIndice, defaultIndice, workspaceRepos } from './lib/indice.mjs';
+import { costruisciIndice, scriviIndice, cartellaIndice, leggiIndice, trova, pulito, INDICE_FILE } from './lib/indicedoc.mjs';
+import { nomiLetti, nomiEsempi, nomiNeiDoc, confrontoEnv, loadEnvConfig, envFileEsterni } from './lib/env.mjs';
 import { RemoteRepos, evaluateRemoteRef } from './lib/remote.mjs';
 import { proposeLinks, insertAnchors } from './lib/suggest.mjs';
 import { REDAZIONI_FILE, parseRedazioni, commitsDelFile, dateDaCommit, soloFrontmatterGit, dateImport, commitsDiTutti, dateDiTutti } from './lib/date.mjs';
-import { toJson, toMarkdown, scanToMarkdown, summarizeRefs, impactToMarkdown, ancoraToccata } from './lib/report.mjs';
+import { toJson, toMarkdown, scanToMarkdown, summarizeRefs, impactToMarkdown, ancoraToccata, NON_BLOCCA, recordMostrabile } from './lib/report.mjs';
 
-export const MR_VERSION = '0.6.0-z8';
-const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi'];
-const WRITERS = new Set(['verify', 'suggest-links', 'remap', 'rivisto']);
+export const MR_VERSION = '0.6.0-z18';
+const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi', 'env', 'stato', 'indice', 'trova'];
+const WRITERS = new Set(['verify', 'suggest-links', 'remap', 'rivisto', 'indice']);
 
 const HELP = `
 mr ${MR_VERSION} — Metadati Relazionali, collegamento codice ↔ doc
@@ -110,6 +120,8 @@ FLAGS (claims, scan):
                      segnalazione doc-stale per doc, nel formato di _arch, su stdout
   --workspace <slug> (segnalazione) slug del workspace; default: nome del repo
 
+  --fail             (claims, scan) exit 1 se c'è almeno un segnale; senza, sempre 0
+
 BERSAGLIO (impact):
   --staged | <commit> | <a>..<b> | <path di un file>
   --docs <dir>       dove cercare i doc (ripetibile; default: la root del repo del codice)
@@ -128,13 +140,37 @@ ALLOW-LIST:
   node tools/mr/mr.mjs coverage [<repo>] [--docs <dir>] [--include-journals]
                                                           punti d'ingresso (funzioni, route, migration,
                                                           CI, deploy, env) che nessun doc cita (R9)
+  node tools/mr/mr.mjs stato [<repo>] [--rev <c>] [--indice <f>] [--ignore-dir <d> --workspace <slug>]
+                                                          onboarding: livello del repo (0 fotografia, 1 doc
+                                                          principali, 2 tutti i doc vivi, 3 nel giro), cosa
+                                                          manca e il prossimo passo; sola lettura (0.6-z11)
+  node tools/mr/mr.mjs env [<repo>] [--docs <dir>] [--rev <c>] [--ignore-dir <d> --workspace <slug>] [--fail]
+                                                          variabili lette dal codice (process.env, Deno.env.get,
+                                                          os.environ, helper di mr.coverage.yaml, \${X} dei compose)
+                                                          contro gli elenchi: file d'esempio (.env*.example, se ci
+                                                          sono) o doc vivi. Dice letti e non elencati, elencati e
+                                                          non letti. --fail: 1 se c'è un nome non elencato (0.6-z9)
+  node tools/mr/mr.mjs indice [--write] [--indice <f>] [--ignore-dir <d>] [--json]
+                                                          indice dei doc dei workspace attivi (gli stessi del giro,
+                                                          dal working tree): id, titolo, type, owner, status,
+                                                          last_updated, percorso, prima riga, vivo/storico. Senza
+                                                          cartelle di dati personali, segreti, CSV. Con --write
+                                                          scrive ~/.mr/indice/INDICE_DOC.tsv (MR_INDICE_DIR) (0.6-z17)
+  node tools/mr/mr.mjs trova <parole> [--owner <o>] [--type <t>] [--repo <r>] [--max <n>] [--json]
+                                                          i 10 doc più pertinenti dell'indice, vivi prima degli
+                                                          storici, con percorso e owner. Solo testo, nessun
+                                                          modello; in prova (0.6-z17)
 
 SCRITTURA:
-  solo verify, suggest-links, remap e rivisto, solo con --write, solo nei doc indicati. Gli altri
+  solo verify, suggest-links, remap e rivisto, solo con --write, solo nei doc indicati; indice, solo con
+  --write, solo il suo TSV. Gli altri
   comandi rifiutano --write. remap applica il ripiego per data+file solo con
   --accept-fallback e un candidato unico.
 
-Exit code: 0 nessun segnale · 1 segnali (verify: link non verificabili) · 2 errore.
+Exit code (0.6-z10): MR segnala, non blocca. claims, scan, impact ed env danno 0 anche con
+segnali, 1 solo con --fail (claims/scan: un not_found o un link in deriva; impact: un'ancora
+toccata; env: un nome non elencato). verify e remap: 1 se restano link non verificabili o non
+risolti. 2: errore del tool.
 `;
 
 export function parseArgs(argv) {
@@ -143,6 +179,7 @@ export function parseArgs(argv) {
     codeRepos: [], externalRepos: [], codeRev: null, subjects: false, docs: [], staged: false, fail: false, includeDocs: false,
     reposFile: null, write: false, includeJournals: false, commitMap: null, acceptFallback: false, workspace: null,
     remote: false, only: null, redazioni: null, tieniReview: false, senzaFrontmatter: false, ignoreDir: null,
+    owner: null, type: null, repo: null, max: null,
   };
   const args = [...argv];
   if (args[0] && !args[0].startsWith('-')) out.cmd = args.shift();
@@ -170,6 +207,15 @@ export function parseArgs(argv) {
     else if (a === '--senza-frontmatter') out.senzaFrontmatter = true;
     else if (a === '--json') out.format = 'json';
     else if (a === '--ignore-dir') out.ignoreDir = need(a, args[++i]);
+    else if (a === '--indice') out.indice = need(a, args[++i]);
+    else if (a === '--owner') out.owner = need(a, args[++i]);
+    else if (a === '--type') out.type = need(a, args[++i]);
+    else if (a === '--repo') out.repo = need(a, args[++i]);
+    else if (a === '--max') {
+      const v = need(a, args[++i]);
+      if (!/^[1-9]\d{0,2}$/.test(String(v))) out.error = `--max vuole un numero da 1 a 999: ${v}`;
+      else out.max = Number(v);
+    }
     else if (a === '--only') {
       const v = need(a, args[++i]);
       const nums = String(v || '').split(',').map((x) => x.trim()).filter(Boolean);
@@ -195,8 +241,11 @@ export function parseArgs(argv) {
   if (out.data && out.cmd && out.cmd !== 'rivisto') out.error = '--data vale solo per rivisto';
   if (out.tieniReview && out.cmd && out.cmd !== 'rivisto') out.error = '--tieni-review vale solo per rivisto';
   if (out.redazioni && out.cmd && out.cmd !== 'date') out.error = '--redazioni vale solo per date';
-  if ((out.senzaFrontmatter || out.ignoreDir) && out.cmd && out.cmd !== 'vivi') out.error = `${out.senzaFrontmatter ? '--senza-frontmatter' : '--ignore-dir'} vale solo per vivi`;
-  if (out.ignoreDir && !out.workspace) out.error = '--ignore-dir vuole anche --workspace <slug> (il file è <dir>/<slug>.ignore, come nel giro)';
+  if (out.senzaFrontmatter && out.cmd && out.cmd !== 'vivi') out.error = '--senza-frontmatter vale solo per vivi';
+  if (out.ignoreDir && out.cmd && !['vivi', 'env', 'stato', 'indice'].includes(out.cmd)) out.error = '--ignore-dir vale solo per vivi, env, stato e indice';
+  if (out.indice && out.cmd && !['stato', 'indice'].includes(out.cmd)) out.error = '--indice vale solo per stato e indice';
+  if ((out.owner || out.type || out.repo || out.max) && out.cmd && out.cmd !== 'trova') out.error = '--owner, --type, --repo e --max valgono solo per trova';
+  if (out.ignoreDir && !out.workspace && out.cmd !== 'indice') out.error = '--ignore-dir vuole anche --workspace <slug> (il file è <dir>/<slug>.ignore, come nel giro)';
   return out;
 }
 
@@ -491,7 +540,7 @@ export function runRivisto(opts) {
   }
   let written = false;
   if (opts.write && changed) {
-    writeFileSync(resolve(repo.root, docRel), lines.join(eol), 'utf-8');
+    scriviNelRepo(repo.root, docRel, lines.join(eol));
     written = true;
   }
   return { meta: { tool: `mr ${MR_VERSION}`, command: 'rivisto', repo: repo.root.split('/').pop(), doc: docRel, id: String(fm.id), last_updated_prima: prima, last_updated: data, review_needed_prima: reviewPrima, review_tolto: reviewTolto, changed, write: !!opts.write, written } };
@@ -600,7 +649,7 @@ export function runVerify(opts) {
   const plan = planVerify(text, ctx, section || null);
   let written = false;
   if (opts.write && plan.newText !== null) {
-    writeFileSync(resolve(repo.root, docRel), plan.newText, 'utf-8');
+    scriviNelRepo(repo.root, docRel, plan.newText);
     written = true;
   }
   return {
@@ -653,7 +702,7 @@ export function runSuggest(opts) {
   if (missing.length) throw new Error(`--only: numeri non presenti nell'anteprima (1-${n}): ${missing.join(', ')}`);
   for (const o of out) {
     if (opts.write && o.newText !== undefined) {
-      writeFileSync(resolve(repo.root, o.doc), o.newText, 'utf-8');
+      scriviNelRepo(repo.root, o.doc, o.newText);
       o.written = true;
     }
     delete o.newText;
@@ -681,7 +730,7 @@ export function runRemap(opts) {
     const newText = apply.length ? applyUpdates(text, apply.map((i) => ({ ref: i.ref, newCommit: i.newCommit, newDate: i.newDate }))) : null;
     let written = false;
     if (opts.write && newText !== null) {
-      writeFileSync(resolve(repo.root, d), newText, 'utf-8');
+      scriviNelRepo(repo.root, d, newText);
       written = true;
     }
     out.push({ doc: d, items, changes: newText !== null ? textChanges(text, newText) : [], written });
@@ -722,10 +771,141 @@ export function runCoverage(opts) {
   return { meta: { tool: `mr ${MR_VERSION}`, command: 'coverage', code_repo: codeRepo.root.split('/').pop(), docs_repo: docRepo.root.split('/').pop(), docs: docs.length, docs_used: c.docs_used, journals_excluded: all.length - docs.length, skipped_docs: skipped, exclude: c.exclude }, entries: c.entries };
 }
 
+/**
+ * env (0.6-z9): variabili lette dal codice contro gli elenchi (file d'esempio o doc vivi). Sola
+ * lettura; regole env: di mr.claims.ignore e dell'allow-list centrale (--ignore-dir) come eccezioni.
+ */
+export function runEnv(opts) {
+  if (opts.paths.length > 1) throw new Error('env: indica un solo repo');
+  const base = resolve(opts.paths[0] || '.');
+  if (!existsSync(base) || !statSync(base).isDirectory()) throw new Error(`env: cartella non trovata: ${opts.paths[0] || '.'}`);
+  const view = RepoView.forPath(base, opts.rev);
+  if (!view) throw new Error(`env: non è dentro un repo git: ${base}`);
+  let central = [];
+  if (opts.ignoreDir) {
+    const f = resolve(opts.ignoreDir, `${opts.workspace}.ignore`);
+    if (existsSync(f)) central = parseIgnore(readFileSync(f, 'utf-8'));
+  }
+  const extra = opts.ignoreFile ? parseIgnore(readFileSync(opts.ignoreFile, 'utf-8')) : [];
+  const rules = [...loadIgnore(view), ...central, ...extra];
+  view.excludeCode(codeExcludes(rules));
+  const cfg = loadEnvConfig(view);
+  const testi = [];
+  // una cartella del repo (un workspace dentro GL): codice, esempi e doc solo lì sotto
+  const prefix = relative(view.root, base) || '.';
+  const docViews = [{ v: view, prefix }, ...opts.docs.map((d) => {
+    const v = RepoView.forPath(resolve(d), opts.rev && resolve(d).startsWith(view.root) ? opts.rev : null);
+    if (!v) throw new Error(`env: --docs non è dentro un repo git: ${d}`);
+    return { v, prefix: relative(v.root, resolve(d)) || '.' };
+  })];
+  let nDoc = 0;
+  for (const { v, prefix } of docViews) {
+    const r = v === view ? rules : [...loadIgnore(v), ...central];
+    const vivi = v.listMarkdownUnder(prefix).filter((rel) => !nonVivo(rel, r));
+    nDoc += vivi.length;
+    testi.push(...v.readFiles(vivi).values());
+  }
+  const c = confrontoEnv(nomiLetti(view, cfg.helpers, prefix), nomiEsempi(view, prefix), nomiNeiDoc(testi), { ignore: cfg.ignore, rules, esterni: envFileEsterni(view, prefix) });
+  return { tool: `mr ${MR_VERSION}`, command: 'env', repo: view.root.split('/').pop(), cartella: prefix, rev: opts.rev || 'working tree', doc_vivi: nDoc, helpers: cfg.helpers, ...c };
+}
+
+/**
+ * stato (0.6-z11, M3): l'onboarding da riga di comando. Livello del repo, cosa manca, prossimo passo.
+ * Sola lettura: vivi, env, mr-validate (processo a parte, solo sul working tree), CLAUDE.md/AGENTS.md
+ * dalla cartella in su (come li legge Claude Code), indice di arch se c'è.
+ */
+export function runStato(opts) {
+  if (opts.paths.length > 1) throw new Error('stato: indica un solo repo o cartella');
+  const base = resolve(opts.paths[0] || '.');
+  const indice = opts.indice || defaultIndice();
+  const ws = existsSync(indice) ? parseIndice(readFileSync(indice, 'utf-8')) : null;
+  const giro = ws ? nelGiro(base, ws) : null;
+  // nel giro: stesse regole del giro (allow-list centrale del workspace accanto all'indice), così i
+  // numeri coincidono con la «Salute dei doc»
+  const w = giro ? ws.filter((x) => x.attivo && (base === x.path || base.startsWith(x.path.replace(/\/+$/, '') + '/'))).sort((a, b) => b.path.length - a.path.length)[0] : null;
+  if (w && !opts.ignoreDir) {
+    const dir = resolve(dirname(indice), '../tool/mr-ignore');
+    if (existsSync(dir)) opts = { ...opts, ignoreDir: dir, workspace: w.slug };
+  }
+  const vivi = runVivi({ ...opts, paths: [base] });
+  const prefix = vivi.meta.cartella;
+  const dentro = (doc) => (prefix === '.' ? doc : doc.slice(prefix.length + 1));
+  const principali = vivi.items.filter((v) => /^(README|CLAUDE|AGENTS)\.md$/i.test(dentro(v.doc))).map((v) => ({ doc: v.doc, frontmatter: v.frontmatter === 'sì' }));
+  // validatore: solo sul working tree (non legge un commit)
+  let validate = null;
+  if (!opts.rev) {
+    const r = spawnSync(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), '../mr-validate/mr-validate.mjs'), '--profile', 'light', base], { encoding: 'utf-8' });
+    const m = (r.stdout || '').match(/\|\s*(\d+) errori\s*\|\s*(\d+) warning/);
+    validate = m ? { errori: Number(m[1]), warning: Number(m[2]) } : { errori: 0, warning: 0, nota: 'nessun doc con frontmatter' };
+  }
+  // la regola «MR segnala, non blocca»: CLAUDE.md o AGENTS.md dalla cartella in su, fino alla home
+  let regola = null;
+  const stop = homedir();
+  for (let d = base; ; d = dirname(d)) {
+    for (const f of ['CLAUDE.md', 'AGENTS.md', 'CLAUDE.local.md']) {
+      const p = join(d, f);
+      try { if (existsSync(p) && haRegola(readFileSync(p, 'utf-8'))) regola ??= p; } catch { /* illeggibile */ }
+    }
+    if (regola || d === stop || d === dirname(d)) break;
+  }
+  const env = runEnv({ ...opts, paths: [base], docs: [] });
+  const l = livello({ vivi: vivi.meta.vivi, conFrontmatter: vivi.meta.con_frontmatter, principali, erroriValidate: validate ? validate.errori : null, regola, giro });
+  return {
+    tool: `mr ${MR_VERSION}`, command: 'stato', repo: vivi.meta.repo, cartella: prefix, rev: opts.rev || 'working tree',
+    ...l,
+    vivi: vivi.meta.vivi, con_frontmatter: vivi.meta.con_frontmatter, principali, validate, regola,
+    allow_list: vivi.meta.regole,
+    env: { elenco: env.elenco, letti: env.letti, non_elencati: env.non_elencati.length, non_letti: env.non_letti.length },
+    giro, indice: ws ? indice : null, workspace: w ? w.slug : opts.workspace || null,
+  };
+}
+
+function statoToMarkdown(r) {
+  const nomi = ['fotografia', 'doc principali', 'tutti i doc vivi', 'nel giro'];
+  const L = [`# Stato MR — ${r.repo}${r.cartella !== '.' ? `/${r.cartella}` : ''} (${r.rev})`, '', NON_BLOCCA, ''];
+  // 0.6-z12: il livello è il più alto con tutti i criteri soddisfatti; «nel giro» non lo alza da solo
+  L.push(`**Livello ${r.livello} — ${nomi[r.livello]}**${r.verso !== null ? `, verso il livello ${r.verso}` : ''}${r.giro && r.livello < 3 ? ' (il workspace è già nel giro di arch, ma il livello 3 chiede prima i livelli 1 e 2)' : ''}`, '');
+  L.push(`**Prossimo passo:** ${r.prossimo}`, '');
+  if (r.mancano.length) L.push('Manca:', '', ...r.mancano.map((m) => `- ${m}`), '');
+  const q = r.vivi ? Math.round((r.con_frontmatter / r.vivi) * 100) : 0;
+  L.push('| voce | stato |', '|---|---|');
+  L.push(`| doc vivi con frontmatter | ${r.con_frontmatter} su ${r.vivi} (${q}%; livello 2 da ${Math.round(SOGLIA_VIVI * 100)}%) |`);
+  L.push(`| doc principali | ${r.principali.length ? r.principali.map((p) => `\`${p.doc}\` ${p.frontmatter ? '✅' : '—'}`).join(', ') : 'nessun README, CLAUDE.md o AGENTS.md'} |`);
+  L.push(`| mr-validate --profile light | ${r.validate ? `${r.validate.errori} errori, ${r.validate.warning} warning${r.validate.nota ? ` (${r.validate.nota})` : ''}` : 'non calcolato con --rev (legge solo il working tree)'} |`);
+  L.push(`| regola «MR segnala, non blocca» | ${r.regola ? `\`${r.regola}\`` : 'non trovata nei CLAUDE.md/AGENTS.md dalla cartella in su'} |`);
+  L.push(`| variabili d'ambiente (mr env) | ${r.env.letti} lette · ${r.env.non_elencati} non elencate · ${r.env.non_letti} elencate e non lette (elenco: ${r.env.elenco === 'doc' ? 'doc vivi' : 'file d\'esempio'}) |`);
+  L.push(`| allow-list | ${r.allow_list.length ? r.allow_list.map((x) => `\`${x}\``).join(', ') : 'nessuna'} |`);
+  L.push(`| giro di arch | ${r.giro === null ? 'indice non trovato (fuori dal Mac di arch)' : r.giro ? 'sì' : 'no'} |`, '');
+  L.push('I criteri di tempo (due settimane a 0 errori, un proprietario che risponde) non si misurano qui. Le variabili e le segnalazioni si guardano dopo la task in corso. Procedura: `report/onboarding/proposta.md` nel repo MR.');
+  return L.join('\n');
+}
+
+function envToMarkdown(r) {
+  const dove = (refs) => refs.slice(0, 3).map((x) => `\`${x.path}:${x.line}\``).join(', ') + (refs.length > 3 ? ` (+${refs.length - 3})` : '');
+  const L = [`# Variabili d'ambiente — ${r.repo}${r.cartella !== '.' ? `/${r.cartella}` : ''} (${r.rev})`, '', NON_BLOCCA, ''];
+  L.push(r.elenco === 'doc'
+    ? `Elenco: i doc vivi (${r.doc_vivi}); nessun file d'esempio nel repo.`
+    : `Elenco: i file d'esempio (${r.esempi.map((f) => `\`${f}\``).join(', ')}), ${r.elencati} nomi. I doc vivi (${r.doc_vivi}) danno solo la nota «citato in un doc».${r.esempi_di_immagini.length ? ` Letti da un'immagine esterna (env_file nel compose, verso «non letti» non controllato): ${r.esempi_di_immagini.map((f) => `\`${f}\``).join(', ')}.` : ''}`);
+  L.push(`Nomi letti dal codice: ${r.letti}${r.helpers.length ? ` (helper: ${r.helpers.join(', ')})` : ''} · ignorati: ${r.ignorati.length} · letti e non elencati: ${r.non_elencati.length} · elencati e non letti: ${r.non_letti.length}.`, '');
+  if (r.non_elencati.length) {
+    L.push('## Letti e non elencati', '', '| nome | dove lo legge il codice | nota |', '|---|---|---|');
+    for (const x of r.non_elencati) L.push(`| \`${x.nome}\` | ${dove(x.refs)} | ${x.nota || ''} |`);
+    L.push('');
+  }
+  if (r.non_letti.length) {
+    L.push('## Elencati e non letti', '', 'Nel file d\'esempio, ma né il codice né i compose li leggono: tolti, o letti in un modo che MR non vede (altro repo, script di shell).', '', '| nome | dove |', '|---|---|');
+    for (const x of r.non_letti) L.push(`| \`${x.nome}\` | ${dove(x.refs)} |`);
+    L.push('');
+  }
+  if (!r.non_elencati.length && !r.non_letti.length) L.push('Elenco e codice combaciano.', '');
+  L.push('Eccezioni: `env_ignore` ed `env_helpers` in mr.coverage.yaml, regole `env:` in mr.claims.ignore. Solo nomi, mai valori.');
+  return L.join('\n');
+}
+
 function coverageToMarkdown(meta, entries) {
   const kinds = ['function', 'route', 'migration', 'ci', 'deploy', 'env'];
   const label = { function: 'Funzioni / handler', route: 'Route', migration: 'Migration', ci: 'CI e cron', deploy: 'Deploy', env: 'Variabili (.env.example)' };
-  const L = [`# Copertura — ${meta.code_repo}`, '', `Doc considerati: ${meta.docs_used} (${meta.docs_repo}; storici e diari esclusi${meta.journals_excluded ? `, ${meta.journals_excluded} diari` : ''})${meta.exclude.length ? ` · esclusi da mr.coverage.yaml: ${meta.exclude.join(', ')}` : ''}`, ''];
+  const L = [`# Copertura — ${meta.code_repo}`, '', NON_BLOCCA, '', `Doc considerati: ${meta.docs_used} (${meta.docs_repo}; storici e diari esclusi${meta.journals_excluded ? `, ${meta.journals_excluded} diari` : ''})${meta.exclude.length ? ` · esclusi da mr.coverage.yaml: ${meta.exclude.join(', ')}` : ''}`, ''];
   L.push('| Tipo | Punti d\'ingresso | Citati | Non citati |', '|---|---|---|---|');
   for (const k of kinds) {
     const es = entries.filter((e) => e.kind === k);
@@ -839,6 +1019,77 @@ function scanSignals(records, refs) {
   return bad + claims;
 }
 
+/**
+ * indice (0.6-z17): indice dei doc dei workspace attivi (gli stessi del giro), dal working tree.
+ * Senza --write dice solo cosa scriverebbe; con --write scrive ~/.mr/indice/INDICE_DOC.tsv
+ * (MR_INDICE_DIR per un'altra cartella). Allow-list centrale: --ignore-dir, altrimenti
+ * `_arch/tool/mr-ignore` accanto all'indice di arch, se c'è.
+ */
+export function runIndice(opts) {
+  if (opts.paths.length) throw new Error('indice: niente argomenti (legge i workspace dall\'indice di arch; --indice <f> per un altro)');
+  const fileIndice = resolve(opts.indice || defaultIndice());
+  if (!existsSync(fileIndice)) throw new Error(`indice dei workspace non trovato: ${fileIndice} (--indice <f>)`);
+  const ignoreDefault = resolve(dirname(fileIndice), '../tool/mr-ignore');
+  const ignoreDir = opts.ignoreDir ? resolve(opts.ignoreDir) : existsSync(ignoreDefault) ? ignoreDefault : null;
+  const t0 = Date.now();
+  const r = costruisciIndice(parseIndice(readFileSync(fileIndice, 'utf-8')), { ignoreDir, workspaceRepos });
+  const file = opts.write ? scriviIndice(r.voci) : join(cartellaIndice(), INDICE_FILE);
+  return {
+    voci: r.voci,
+    meta: {
+      tool: `mr ${MR_VERSION}`, command: 'indice', indice_workspace: fileIndice, allow_list: ignoreDir, file, scritto: Boolean(opts.write),
+      workspace: r.workspace, doc: r.voci.length, vivi: r.voci.filter((v) => v.stato === 'vivo').length,
+      con_frontmatter: r.voci.filter((v) => v.id).length, esclusi: r.esclusi, note: r.note, ms: Date.now() - t0,
+    },
+  };
+}
+
+function indiceToMarkdown(m) {
+  const L = [`# Indice dei doc — ${m.doc} doc in ${m.workspace} workspace`, ''];
+  L.push(`Vivi: ${m.vivi} · storici: ${m.doc - m.vivi} · con frontmatter MR: ${m.con_frontmatter} · ${m.ms} ms`);
+  const ex = Object.entries(m.esclusi).map(([k, n]) => `${k} ${n}`).join(', ');
+  L.push(`Esclusi: ${ex || 'nessuno'} (solo .md: mai CSV o export).`);
+  L.push(`Allow-list centrale: ${m.allow_list ? `\`${m.allow_list}\`` : 'nessuna'}.`);
+  if (m.note.length) L.push('', 'Note:', ...m.note.map((n) => `- ${n}`));
+  L.push('', m.scritto ? `Scritto: \`${m.file}\`. Cerca con \`mr trova <parole>\`.` : `Anteprima: nulla è stato scritto. Con --write scrive \`${m.file}\`.`);
+  return L.join('\n');
+}
+
+/** trova (0.6-z17, in prova): i doc più pertinenti dall'indice, solo testo */
+export function runTrova(opts) {
+  const q = opts.paths.join(' ').trim();
+  if (!q && !opts.owner && !opts.type && !opts.repo) throw new Error('trova: indica almeno una parola (o --owner, --type, --repo)');
+  const file = join(cartellaIndice(), INDICE_FILE);
+  if (!existsSync(file)) throw new Error(`indice non trovato: ${file}. Generalo con \`mr indice --write\` (lo scrive anche il giro).`);
+  const voci = leggiIndice(file);
+  const r = trova(voci, q, { owner: opts.owner, type: opts.type, repo: opts.repo, max: opts.max ?? 10 });
+  const data = statSync(file).mtime;
+  const giorni = Math.floor((Date.now() - data.getTime()) / 86400000);
+  return {
+    tool: `mr ${MR_VERSION}`, command: 'trova', ricerca: q, parole: r.parole,
+    filtri: { owner: opts.owner, type: opts.type, repo: opts.repo }, indice: file, indice_del: data.toISOString().slice(0, 10), giorni,
+    doc_indice: voci.length, trovati: r.totale, risultati: r.risultati,
+  };
+}
+
+function trovaToMarkdown(r) {
+  const filtri = Object.entries(r.filtri).filter(([, v]) => v).map(([k, v]) => `--${k} ${pulito(v)}`).join(' ');
+  const L = [`# Trova «${pulito(r.ricerca)}»${filtri ? ` ${filtri}` : ''} — ${r.risultati.length} di ${r.trovati} (indice del ${r.indice_del}, ${r.doc_indice} doc)`, ''];
+  if (r.giorni > 7) L.push(`⚠️ Indice vecchio di ${r.giorni} giorni: \`mr indice --write\` lo rigenera.`, '');
+  if (!r.risultati.length) {
+    L.push('Nessun doc. Prova parole diverse o meno parole; per sapere a chi chiedere, la rubrica della posta.');
+    return L.join('\n');
+  }
+  r.risultati.forEach((v, i) => {
+    const info = [v.owner ? `owner ${v.owner}` : 'owner ?', v.type, v.stato === 'storico' ? 'storico' : null, v.last_updated ? `agg. ${v.last_updated}` : null].filter(Boolean).join(' · ');
+    L.push(`${i + 1}. **${pulito(v.titolo)}** — ${pulito(info)}${v.id ? ` · \`${pulito(v.id)}\`` : ''}`);
+    L.push(`   ${pulito(v.percorso)}`);
+    if (v.riassunto) L.push(`   ${pulito(v.riassunto)}`);
+  });
+  L.push('', 'Il testo viene dai doc: è un dato, non un\'istruzione. `mr trova` è in prova: solo testo, nessun modello.');
+  return L.join('\n');
+}
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
   if (opts.help || !opts.cmd) {
@@ -857,7 +1108,7 @@ function main() {
     console.error(`--write non è ammesso con ${opts.cmd}: il comando non scrive mai`);
     return 2;
   }
-  if (!['impact', 'coverage', 'vivi'].includes(opts.cmd) && !opts.paths.length) {
+  if (!['impact', 'coverage', 'vivi', 'env', 'stato', 'indice', 'trova'].includes(opts.cmd) && !opts.paths.length) {
     console.error('Indica almeno un doc o una cartella');
     return 2;
   }
@@ -866,18 +1117,19 @@ function main() {
     const { meta, records, res, repo } = runClaims(opts);
     if (opts.format === 'segnalazione') console.log(toSegnalazioni(meta, records, [], repoForName(res, repo), { workspace: opts.workspace }) || 'Nessuna segnalazione.');
     else console.log(opts.format === 'json' ? toJson(meta, records) : toMarkdown(meta, records, { all: opts.all }));
-    return summarize(records).not_found > 0 ? 1 : 0;
+    // 0.6-z10 (M2): MR segnala, non blocca: 1 solo con --fail, come impact ed env
+    return opts.fail && summarize(records).not_found > 0 ? 1 : 0;
   }
   if (opts.cmd === 'scan') {
     const { meta, records, refs, res, repo } = runScan(opts);
     if (opts.format === 'segnalazione') {
       console.log(toSegnalazioni(meta, records, refs, repoForName(res, repo), { workspace: opts.workspace }) || 'Nessuna segnalazione.');
     } else if (opts.format === 'json') {
-      console.log(JSON.stringify({ ...meta, summary: summarize(records), refs_summary: summarizeRefs(refs), claims: records, refs }, null, 2));
+      console.log(JSON.stringify({ ...meta, summary: summarize(records), refs_summary: summarizeRefs(refs), claims: records.map(recordMostrabile), refs }, null, 2));
     } else {
       console.log(scanToMarkdown(meta, records, refs, { all: opts.all }));
     }
-    return scanSignals(records, refs) > 0 ? 1 : 0;
+    return opts.fail && scanSignals(records, refs) > 0 ? 1 : 0;
   }
   if (opts.cmd === 'verify') {
     const { meta, plan, changes } = runVerify(opts);
@@ -916,6 +1168,26 @@ function main() {
     const { meta, entries } = runCoverage(opts);
     console.log(opts.format === 'json' ? JSON.stringify({ ...meta, entries }, null, 2) : coverageToMarkdown(meta, entries));
     return 0;
+  }
+  if (opts.cmd === 'stato') {
+    const res = runStato(opts);
+    console.log(opts.format === 'json' ? JSON.stringify(res, null, 2) : statoToMarkdown(res));
+    return 0;
+  }
+  if (opts.cmd === 'indice') {
+    const res = runIndice(opts);
+    console.log(opts.format === 'json' ? JSON.stringify(res.meta, null, 2) : indiceToMarkdown(res.meta));
+    return 0;
+  }
+  if (opts.cmd === 'trova') {
+    const res = runTrova(opts);
+    console.log(opts.format === 'json' ? JSON.stringify(res, null, 2) : trovaToMarkdown(res));
+    return 0;
+  }
+  if (opts.cmd === 'env') {
+    const res = runEnv(opts);
+    console.log(opts.format === 'json' ? JSON.stringify(res, null, 2) : envToMarkdown(res));
+    return opts.fail && res.non_elencati.length ? 1 : 0;
   }
   if (opts.cmd === 'remap') {
     const { meta, docs } = runRemap(opts);

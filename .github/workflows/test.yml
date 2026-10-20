@@ -66,5 +66,8 @@ jobs:
 
       - name: Niente API LLM né path cablati in tools/
         run: |
-          if grep -rniE "deepseek|api\.openai|base_url" tools/ --exclude-dir=node_modules; then exit 1; fi
+          if grep -rniE "deepseek|api\.openai" tools/ --exclude-dir=node_modules; then exit 1; fi
+          # base_url dei client LLM (python base_url=, JS baseURL, OPENAI_BASE_URL); sensibile alle maiuscole:
+          # BASE_URL e DATABASE_URL come nomi di variabili d'ambiente (mr env, 0.6-z9) sono legittimi
+          if grep -rnE "(^|[^A-Za-z_])base_url|baseURL|[A-Z]+_API_BASE|OPENAI_BASE_URL" tools/ --exclude-dir=node_modules; then exit 1; fi
           if grep -rnE "/Users/|C:\\\\|progetti/" tools/ --exclude-dir=node_modules; then exit 1; fi
