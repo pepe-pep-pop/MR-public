@@ -1,6 +1,6 @@
 {
   "name": "mr",
-  "version": "0.6.0-z18",
+  "version": "0.6.0-z23",
   "private": true,
   "description": "Comando mr (MR v0.6): claim check, deriva dei link, impatto, verify e suggest-links. Scrive solo verify/suggest-links con --write.",
   "license": "Apache-2.0",
@@ -12,7 +12,7 @@
     "mr": "mr.mjs"
   },
   "scripts": {
-    "test": "node test-claims.mjs && node test-scan.mjs && node test-redact.mjs && node test-repomap.mjs && node test-verify.mjs && node test-remap.mjs && node test-coverage.mjs && node test-remote.mjs && node test-giro.mjs && node test-codice.mjs && node test-verbo.mjs && node test-giro-ancore.mjs && node test-skill.mjs && node test-giro-salute.mjs && node test-rivisto.mjs && node test-date.mjs && node test-vivi.mjs && node test-suggest.mjs && node test-env.mjs && node test-stato.mjs && node test-sicurezza.mjs && node test-token-sh.mjs && node test-trasferiti.mjs && node test-indice.mjs"
+    "test": "node test-claims.mjs && node test-scan.mjs && node test-redact.mjs && node test-repomap.mjs && node test-verify.mjs && node test-remap.mjs && node test-coverage.mjs && node test-remote.mjs && node test-giro.mjs && node test-codice.mjs && node test-verbo.mjs && node test-giro-ancore.mjs && node test-skill.mjs && node test-giro-salute.mjs && node test-rivisto.mjs && node test-date.mjs && node test-vivi.mjs && node test-suggest.mjs && node test-env.mjs && node test-stato.mjs && node test-sicurezza.mjs && node test-token-sh.mjs && node test-trasferiti.mjs && node test-indice.mjs && node test-censura.mjs"
   },
   "dependencies": {
     "yaml": "2.9.1"

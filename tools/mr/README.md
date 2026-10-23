@@ -6,7 +6,7 @@ type: reference
 owner: rnd
 status: active
 created: '2026-10-03'
-last_updated: '2026-10-18'
+last_updated: '2026-10-22'
 depends_on:
   - id: mr/formato-v06-delta
     reason: "descrive i comandi del formato 0.6 (code_refs, ancore)"
@@ -31,7 +31,7 @@ node tools/mr/mr.mjs coverage [<repo>] [--docs <dir>]   # punti d'ingresso che n
 node tools/mr/mr.mjs env [<repo>] [--docs <dir>] [--rev <c>] [--fail]   # variabili lette dal codice ↔ elenchi (0.6-z9)
 node tools/mr/mr.mjs stato [<repo>] [--rev <c>] [--indice <f>]        # onboarding: livello, cosa manca, prossimo passo (0.6-z11)
 node tools/mr/mr.mjs indice [--write] [--indice <f>] [--ignore-dir <d>]  # indice dei doc dei workspace (0.6-z17)
-node tools/mr/mr.mjs trova <parole> [--owner o] [--type t] [--repo r] [--max n] [--json]  # ricerca nell'indice, in prova (0.6-z17)
+node tools/mr/mr.mjs trova <parole> [--owner o] [--type t] [--repo r] [--max n] [--testo] [--senza-rinnovo] [--json]  # ricerca nell'indice, in prova (0.6-z17); indice più vecchio di un giorno rigenerato (0.6-z24)
 node tools/mr/uso.mjs [--settimane n] [--tsv]                          # uso di MR a settimana dai transcript (0.6-z17)
 ```
 
@@ -107,8 +107,20 @@ doc e sezioni da ricontrollare:
 - claim: path che corrispondono a un file toccato (solo file, un nome nudo solo se unico nel repo); nomi (env, simboli) nelle righe cambiate; tabelle come testo esatto o nei file di schema; endpoint nelle righe cambiate.
 
 I `.md` toccati non contano (i legami doc ↔ doc sono di `mr-scanner`), salvo `--include-docs`.
-`--fail` dà exit 1 se ci sono doc da ricontrollare. Pensato per un hook che avvisa: per ora resta
-un comando manuale (decisione del maintainer).
+`--fail` dà exit 1 solo se è toccata un'ancora (dalla 0.6-t): i path e i nomi citati dai claim e le
+ancore «file toccato, simbolo no» restano nel report ma non cambiano l'exit code. Pensato per un hook
+che avvisa: per ora resta un comando manuale (decisione del maintainer).
+
+**Uso da un altro workspace** (CLAUDE.md di GL: prima di modificare un file di codice che ha doc):
+`node ~/.mr/rilascio/tools/mr/mr.mjs impact <file>`, lanciato da dentro il repo del file (anche da una
+sottocartella). Il comando non è nel PATH. Colonne della tabella:
+- **Via:** come il doc lega il file (ancora, `code_refs`, claim di tipo path);
+- **Riferimento:** come il doc lo scrive;
+- **Perché:** il motivo della riga.
+
+I doc storici in coda sono solo informativi. Con molti doc l'output è lungo: `--format json`, oppure
+leggi solo la tabella in testa. Un `.md` come bersaglio non dà errore, ma non trova nulla: impact
+guarda il codice.
 
 ## verify — verifica e aggiornamento di `verified` (R7)
 
@@ -223,7 +235,22 @@ lavora, non solo per chi mantiene i doc.
   (`--max`), con percorso, owner, type e prima riga; avvisa se l'indice ha più di 7 giorni. Filtri
   `--owner`, `--type` (esatto), `--repo` (repo o workspace). Circa 0,1 secondi. Nessun modello: se non
   basta si valuta una ricerca semantica (qmd).
-- **`uso.mjs`:** conta nei transcript di Claude Code (`~/.claude/projects`) i comandi Bash che lanciano
+  - **Rinnovo automatico** (0.6-z24, sì di il maintainer del 22/10): se l'indice manca o ha più di un giorno,
+    `trova` lo rigenera prima di cercare, come `mr indice --write` (circa 2 secondi, scrive solo il TSV in
+    `~/.mr/indice/`), e lo dice nell'output: «Indice rigenerato». È l'unica scrittura di MR senza
+    `--write`. `--senza-rinnovo` la evita. Se il rinnovo fallisce, o l'indice di arch non c'è, cerca
+    nell'indice che c'è; oltre 7 giorni avvisa.
+  - **Risultati parziali** (0.6-z21): con più parole, se nessun doc le contiene tutte, l'output lo dice.
+    I risultati che contengono solo una parte delle parole vanno trattati come «nessun risultato», se
+    non c'entrano col tema. Una parola che non c'è in nessun doc dà 0 risultati.
+  - **Nel testo dei doc** (0.6-z23): con una frase tra virgolette (`trova "verificabile fino al"`), con
+    `--testo`, o quando nessun doc dell'indice ha tutte le parole nel titolo, nell'id o nella prima riga,
+    `trova` cerca anche nel corpo dei doc dell'indice, con le stesse esclusioni. Stampa il doc, la riga e la
+    sezione, mai il testo della riga, che può contenere dati personali. Un nome con underscore
+    (`pagamento_con_garanzia`) è una parola sola. Circa 0,4 secondi su 2400 doc.
+  - **Da qualunque cartella:** l'indice copre tutti i workspace attivi, quindi `trova` non dipende
+    dalla cartella da cui si lancia.
+- **`uso.mjs`** (dalla z20 anche skill `chi-sa-cosa`, ricerche vuote, «doc aperto dopo» entro 30 minuti, e `--dettaglio` per giorno e progetto): conta nei transcript di Claude Code (`~/.claude/projects`) i comandi Bash che lanciano
   MR, per settimana ISO e gruppo (`mr`, `arch`, `altri`); stampa solo numeri. È l'indicatore 5 della §12:
   `trova` + `impact` degli altri workspace sul totale delle loro invocazioni. `--tsv` per
   `mr-performance.tsv`, che tiene arch.

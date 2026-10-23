@@ -386,7 +386,7 @@ Quando un documento A con `propagate_staleness_to: [{id: B, ...}]` viene modific
 | `mr/formato-v06-delta` | `spec` | `formato_MR_v0.6_delta.md` | `active` | `2026-10-03` | `2026-10-13` |
 | `mr/matrix` | `spec` | `matrix.md` | `active` | `2026-04-26` | `2026-10-03` |
 | `mr/tools-mr-kg-readme` | `reference` | `tools/mr-kg/README.md` | `active` | `2026-06-25` | `2026-10-03` |
-| `mr/tools-mr-readme` | `reference` | `tools/mr/README.md` | `active` | `2026-10-03` | `2026-10-18` |
+| `mr/tools-mr-readme` | `reference` | `tools/mr/README.md` | `active` | `2026-10-03` | `2026-10-22` |
 
 <!-- MR-REGISTRY-END -->
 

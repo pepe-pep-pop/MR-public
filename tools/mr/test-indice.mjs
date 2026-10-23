@@ -10,13 +10,13 @@
  */
 
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, statSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, statSync, realpathSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { conta, invocazioni, gruppo, settimana } from './uso.mjs';
+import { conta, misura, esitoTrova, invocazioni, gruppo, settimana } from './uso.mjs';
 import { defaultIndice, INDICE_GL } from './lib/indice.mjs';
-import { titoloERiassunto, datiSensibili, trova, fromTsv, toTsv, cartellaPersonale } from './lib/indicedoc.mjs';
+import { parole as pp, titoloERiassunto, datiSensibili, trova, fromTsv, toTsv, cartellaPersonale } from './lib/indicedoc.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MR = join(here, 'mr.mjs');
@@ -53,6 +53,8 @@ write(app, 'docs/vecchio.md', `${FM('app/vecchio', 'Deploy vecchio', '').replace
 write(app, 'docs/hof-app-2.md', '# Handoff deploy VPS\n\nStato del deploy al 10/10.\n');
 write(app, 'docs/contatti.md', `# Referenti\n\nScrivere a mario.rossi@example.com per il deploy.\n`);
 write(app, 'docs/escape.md', '# Titolo \x1b[31mrosso\x1b[0m\n\nRiga\tcon tab e \x07 campanello.\n');
+write(app, 'docs/procedura.md', '# Procedura interna\n\nIntroduzione generica.\n\n## Scadenze\n\nIl dato resta verificabile fino al giorno dopo, scrive Mario Rossi.\nLa property codice_speciale_xyz va letta qui.\n');
+write(app, 'candidati/nota.md', '# Nota\n\nverificabile fino al venerdì\n');
 write(app, 'docs/SEGRETI.txt', 'non è un doc\n');
 write(app, 'candidati/elenco.md', '# Elenco candidati deploy\n');
 write(app, 'riservato/note.md', '# Note riservate deploy\n');
@@ -82,7 +84,7 @@ const fileTsv = join(dirIndice, 'INDICE_DOC.tsv');
 test('senza --write: anteprima con i conteggi, nessun file scritto', () => {
   const r = run(MR, 'indice', '--indice', indiceWs);
   assert(r.code === 0, `exit ${r.code}: ${r.err}`);
-  assert(/# Indice dei doc — 6 doc in 2 workspace/.test(r.out), r.out);
+  assert(/# Indice dei doc — 7 doc in 2 workspace/.test(r.out), r.out);
   assert(/Anteprima: nulla è stato scritto/.test(r.out), 'anteprima');
   assert(!existsSync(dirIndice), 'cartella creata senza --write');
 });
@@ -96,7 +98,7 @@ test('--write: TSV con le colonne, permessi solo dell\'utente', () => {
   const t = readFileSync(fileTsv, 'utf-8');
   assert(t.split('\n')[0] === 'id\ttitolo\ttype\towner\tstatus\tlast_updated\tpercorso\triassunto\tstato\tworkspace\trepo', t.split('\n')[0]);
   voci = fromTsv(t);
-  assert(voci.length === 6, `voci: ${voci.length}`);
+  assert(voci.length === 7, `voci: ${voci.length}`);
   assert(voci.every((v) => Object.keys(v).length === 11), 'colonne');
 });
 
@@ -158,7 +160,7 @@ test('trova: filtri --owner, --type, --repo, --max e --json', () => {
   const t = JSON.parse(run(MR, 'trova', 'deploy', '--type', 'guide', '--json').out);
   assert(t.risultati.every((x) => x.type === 'guide') && t.risultati.length === 1, 'type');
   const rp = JSON.parse(run(MR, 'trova', '--repo', 'app', '--json').out);
-  assert(rp.risultati.length === 5 && rp.risultati.every((x) => x.repo === 'app'), `repo: ${rp.risultati.length}`);
+  assert(rp.risultati.length === 6 && rp.risultati.every((x) => x.repo === 'app'), `repo: ${rp.risultati.length}`);
   const m = JSON.parse(run(MR, 'trova', 'deploy', '--max', '2', '--json').out);
   assert(m.risultati.length === 2 && m.trovati > 2, 'max');
   assert(run(MR, 'trova', 'deploy', '--max', '0').code === 2, '--max 0 rifiutato');
@@ -178,9 +180,57 @@ test('trova: ordine (più parole trovate, poi vivi, poi punteggio) e prefissi', 
   assert(fromTsv(toTsv(vs.map((v) => ({ ...v, titolo: 'a\tb\nc' }))))[0].titolo === 'a b c', 'tab e a capo tolti');
 });
 
+test('trova (0.6-z21): più parole senza un doc che le contenga tutte → avviso di risultati parziali', () => {
+  const r = run(MR, 'trova', 'deploy', 'inesistentissimo');
+  assert(r.code === 0 && /Nessun doc contiene tutte le 2 parole/.test(r.out), r.out);
+  assert(!/Nessun doc contiene tutte/.test(run(MR, 'trova', 'deploy', 'vps').out), 'avviso con risultati completi');
+  assert(JSON.parse(run(MR, 'trova', 'deploy', 'inesistentissimo', '--json').out).completi === 0, 'completi');
+});
+
+test('parole (0.6-z22): underscore intero, preposizioni ignorate, sigle di 2 lettere tenute', () => {
+  assert(JSON.stringify(pp('pagamento_con_garanzia')) === '["pagamento_con_garanzia"]', JSON.stringify(pp('pagamento_con_garanzia')));
+  assert(JSON.stringify(pp('verificabile fino al')) === '["verificabile"]', JSON.stringify(pp('verificabile fino al')));
+  assert(JSON.stringify(pp('token LW')) === '["token","lw"]' && JSON.stringify(pp('DB di MR, la KB')) === '["db","mr","kb"]', JSON.stringify(pp('DB di MR, la KB')));
+  const vs = [{ titolo: 'Property pagamento_con_garanzia', percorso: '/a/p.md', stato: 'vivo' }, { titolo: 'Pagamenti', percorso: '/a/q.md', stato: 'vivo' }];
+  const r = trova(vs, 'pagamento_con_garanzia');
+  assert(r.risultati.length === 1 && r.risultati[0].percorso === '/a/p.md', JSON.stringify(r.risultati));
+});
+
+test('trova nel testo (0.6-z23): frase esatta, nome con underscore, --testo; riga e sezione, mai il testo della riga', () => {
+  const f = run(MR, 'trova', 'verificabile fino al');
+  assert(f.code === 0 && /## Nel testo dei doc — 1 di 1 \(frase esatta: «verificabile fino al»\)/.test(f.out), f.out);
+  assert(f.out.includes(`${join(app, 'docs/procedura.md')}:7`) && /riga 7, sezione «Scadenze», 1 volta/.test(f.out), f.out);
+  assert(!f.out.includes('Mario') && !f.out.includes('candidati'), 'testo della riga o cartella esclusa nell\'output');
+  assert(f.out.indexOf('## Nel testo dei doc') < f.out.indexOf('## Per titolo'), 'con una frase il testo viene prima');
+  const u = JSON.parse(run(MR, 'trova', 'codice_speciale_xyz', '--json').out);
+  assert(u.completi === 0 && u.testo && u.testo.motivo.startsWith('nessun doc') && u.testo.risultati[0].riga === 8, JSON.stringify(u.testo));
+  const t = JSON.parse(run(MR, 'trova', 'deploy', '--testo', '--json').out);
+  assert(t.testo && t.testo.motivo === '--testo' && t.testo.totale >= 1, JSON.stringify(t.testo));
+  const n = JSON.parse(run(MR, 'trova', 'deploy', 'vps', '--json').out);
+  assert(n.testo === null, 'testo cercato anche con risultati completi');
+  assert(/né nel titolo né nel testo/.test(run(MR, 'trova', 'parolachenonesiste').out), 'nessun risultato');
+  assert(run(MR, 'claims', 'x.md', '--testo').code === 2, '--testo fuori da trova');
+});
+
 test('trova: indice mancante → errore chiaro, exit 2', () => {
-  const r = spawnSync(process.execPath, [MR, 'trova', 'deploy'], { cwd: base, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: join(base, 'vuota') } });
+  const r = spawnSync(process.execPath, [MR, 'trova', 'deploy'], { cwd: base, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: join(base, 'vuota'), MR_INDICE_ARCH: join(base, 'nessuno.md') } });
   assert(r.status === 2 && /mr indice --write/.test(r.stderr), `${r.status} ${r.stderr}`);
+  assert(!existsSync(join(base, 'vuota', 'INDICE_DOC.tsv')), 'scritto senza indice di arch');
+});
+
+test('trova (0.6-z24): indice assente o di più di un giorno → rigenerato; fresco o --senza-rinnovo → no', () => {
+  const d = join(base, 'indice-rinnovo');
+  const tsv = join(d, 'INDICE_DOC.tsv');
+  const t = (...a) => spawnSync(process.execPath, [MR, 'trova', 'deploy', ...a], { cwd: base, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: d, MR_INDICE_ARCH: indiceWs } });
+  const r1 = t();
+  assert(r1.status === 0 && /Indice rigenerato/.test(r1.stdout) && existsSync(tsv), `${r1.status} ${r1.stdout} ${r1.stderr}`);
+  assert(!/Indice rigenerato/.test(t().stdout), 'rigenerato anche se fresco');
+  const ieri = new Date(Date.now() - 2 * 86400000);
+  utimesSync(tsv, ieri, ieri);
+  assert(!/Indice rigenerato/.test(t('--senza-rinnovo').stdout) && statSync(tsv).mtime.getTime() < Date.now() - 86400000, '--senza-rinnovo');
+  const j = JSON.parse(t('--json').stdout);
+  assert(j.rinnovo && j.rinnovo.doc > 0 && statSync(tsv).mtime.getTime() > Date.now() - 60000, JSON.stringify(j.rinnovo));
+  assert(run(MR, 'claims', 'x.md', '--senza-rinnovo').code === 2, '--senza-rinnovo fuori da trova');
 });
 
 test('giro: completo con --write riscrive l\'indice; parziale (--only) no', () => {
@@ -190,7 +240,7 @@ test('giro: completo con --write riscrive l\'indice; parziale (--only) no', () =
   assert(!existsSync(join(d1, 'INDICE_DOC.tsv')), 'scritto da un giro parziale');
   const r = g('--write', '--giro-dir', join(base, 'giro2'));
   assert(r.status === 0, `exit ${r.status}: ${r.stderr}`);
-  assert(existsSync(join(d1, 'INDICE_DOC.tsv')) && /indice dei doc: .*\(6 doc/.test(r.stdout), r.stdout);
+  assert(existsSync(join(d1, 'INDICE_DOC.tsv')) && /indice dei doc: .*\(7 doc/.test(r.stdout), r.stdout);
   g('--write', '--giro-dir', join(base, 'giro3'), '--senza-indice');
 });
 
@@ -211,7 +261,7 @@ test('uso.mjs: invocazioni per settimana e gruppo, chiamate ripetute contate una
   assert(altri.impact === 1 && altri.trova === 1 && altri.totale === 2, JSON.stringify(r));
   assert(r.find((x) => x.gruppo === 'arch').altri_mr === 1, 'arch');
   const out = spawnSync(process.execPath, [join(here, 'uso.mjs'), '--dir', dir, '--settimane', '1', '--tsv'], { encoding: 'utf-8' }).stdout;
-  assert(out.split('\n')[0] === 'settimana\tgruppo\ttrova\timpact\taltri_mr\tvalidate\tgiro\ttotale' && !out.includes('x.ts') && !out.includes('deploy'), out);
+  assert(out.split('\n')[0] === 'settimana\tgruppo\ttrova\timpact\taltri_mr\tvalidate\tgiro\ttotale\tchi_sa_cosa\ttrova_vuote\ttrova_doc_aperto' && !out.includes('x.ts') && !out.includes('deploy'), out);
 });
 
 test('defaultIndice (0.6-z18): MR_INDICE_ARCH, poi relativo, poi la posizione abituale in GL', () => {
@@ -223,6 +273,31 @@ test('defaultIndice (0.6-z18): MR_INDICE_ARCH, poi relativo, poi la posizione ab
   // sul Mac di il maintainer la posizione abituale; in CI non c'è, e resta il percorso relativo
   if (existsSync(INDICE_GL)) assert(d === INDICE_GL, `atteso ${INDICE_GL}, avuto ${d}`);
   else assert(d.endsWith('_arch/segnalazioni/indice.md'), d);
+});
+
+test('uso.mjs (0.6-z20): chi-sa-cosa, ricerche vuote, doc aperto dopo; per giorno e progetto', () => {
+  const dir = join(base, 'projects-z20');
+  const ora = new Date();
+  const t = (min) => new Date(ora.getTime() - 120 * 60000 + min * 60000).toISOString();
+  const uso = (id, ts, input, name = 'Bash') => JSON.stringify({ timestamp: ts, message: { content: [{ type: 'tool_use', id, name, input }] } });
+  const ris = (id, ts, text) => JSON.stringify({ timestamp: ts, message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text }] }] } });
+  const pieno = '# Trova «deploy» — 2 di 5 (indice del 2026-10-22, 10 doc)\n\n1. **Deploy** — owner app\n   /x/app/docs/deploy.md\n2. **Altro** — owner app\n   /x/app/docs/altro.md';
+  write(dir, '-Users-x-Documents-GL--code--soft-app-web/s.jsonl', [
+    uso('a1', t(0), { skill: 'chi-sa-cosa' }, 'Skill'),
+    uso('a2', t(1), { command: 'node ~/.mr/rilascio/tools/mr/mr.mjs trova deploy' }), ris('a2', t(1), pieno),
+    uso('a3', t(5), { file_path: '/x/app/docs/deploy.md' }, 'Read'),
+    uso('a4', t(10), { command: 'node mr.mjs trova niente' }), ris('a4', t(10), '# Trova «niente» — 0 di 0 (indice del 2026-10-22, 10 doc)\n\nNessun doc.'),
+    uso('a5', t(11), { command: 'node mr.mjs trova tardi' }), ris('a5', t(11), pieno),
+    uso('a6', t(80), { file_path: '/x/app/docs/altro.md' }, 'Read'),
+  ].join('\n'));
+  const m = misura(dir, { settimane: 1 });
+  const w = m.settimane.find((x) => x.gruppo === 'altri');
+  assert(w.trova === 3 && w.chi_sa_cosa === 1 && w.trova_vuote === 1 && w.trova_doc_aperto === 1, JSON.stringify(w));
+  const g = m.giorni.find((x) => x.progetto === 'app-web');
+  assert(g && g.trova === 3 && g.trova_doc_aperto === 1, JSON.stringify(m.giorni));
+  assert(esitoTrova('# Trova «x» — 0 di 0 (…)\n\nNessun doc.').risultati === 0 && esitoTrova('').risultati === null, 'esitoTrova');
+  const out = spawnSync(process.execPath, [join(here, 'uso.mjs'), '--dir', dir, '--settimane', '1', '--dettaglio', '--tsv'], { encoding: 'utf-8' }).stdout;
+  assert(out.split('\n')[0] === 'giorno\tprogetto\ttrova\ttrova_vuote\ttrova_doc_aperto\tchi_sa_cosa\timpact\ttotale' && /\tapp-web\t3\t1\t1\t1\t0\t3/.test(out) && !out.includes('deploy'), out);
 });
 
 const ok = results.filter(Boolean).length;

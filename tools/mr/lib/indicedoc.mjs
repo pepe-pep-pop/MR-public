@@ -18,7 +18,8 @@
  * di controllo si tolgono sia scrivendolo sia stampandolo (niente sequenze del terminale dai doc).
  *
  * `mr trova` è in prova (il maintainer, 20/10): solo testo, nessun modello. Una ricerca semantica (qmd) si
- * valuta solo se questa non basta.
+ * valuta solo se questa non basta. Dalla 0.6-z23 cerca anche nel corpo dei doc (cercaNelTesto), quando
+ * l'indice non dà un doc con tutte le parole, o con una frase esatta, o con --testo.
  */
 
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, chmodSync } from 'node:fs';
@@ -235,14 +236,17 @@ export function norm(s) {
   return String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 }
 
-const PAROLE_VUOTE = new Set(['il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'una', 'di', 'del', 'della', 'dei', 'delle', 'a', 'al', 'da', 'in', 'nel', 'nella', 'con', 'su', 'per', 'e', 'o', 'che', 'chi', 'come', 'dove', 'the', 'of', 'and', 'to']);
+const PAROLE_VUOTE = new Set(['ai', 'ad', 'ed', 'ne', 'se', 'si', 'ci', 'vi', 'mi', 'ti', 'or', 'is', 'on', 'at', 'by', 'an', 'as', 'allo', 'alla', 'alle', 'agli', 'dal', 'dallo', 'dalla', 'dai', 'dalle', 'sul', 'sulla', 'sui', 'sulle', 'nei', 'negli', 'nelle', 'col', 'tra', 'fra', 'per', 'non', 'una', 'uno', 'gli', 'del', 'dei', 'fino', 'the', 'for', 'with', 'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'una', 'di', 'del', 'della', 'dei', 'delle', 'a', 'al', 'da', 'in', 'nel', 'nella', 'con', 'su', 'per', 'e', 'o', 'che', 'chi', 'come', 'dove', 'the', 'of', 'and', 'to']);
 
 /** parole della ricerca: minuscole, senza accenti né parole vuote */
+// 0.6-z22: un nome con underscore (pagamento_con_garanzia, DB_PASSWORD) resta una parola sola; le
+// parole di una lettera non contano (le sigle di due, LW, DB, KB, restano: le parole vuote di due lettere sono in PAROLE_VUOTE)
 export function parole(q) {
-  return [...new Set(norm(q).split(/[^a-z0-9]+/).filter((t) => t && !PAROLE_VUOTE.has(t)))];
+  return [...new Set(norm(q).split(/[^a-z0-9_]+/).map((t) => t.replace(/^_+|_+$/g, '')).filter((t) => t.length > 1 && !PAROLE_VUOTE.has(t)))];
 }
 
-const tokens = (s) => norm(s).split(/[^a-z0-9]+/).filter(Boolean);
+// nei campi un nome con underscore vale sia intero sia per le sue parti
+const tokens = (s) => norm(s).split(/[^a-z0-9_]+/).flatMap((t) => (t.includes('_') ? [t.replace(/^_+|_+$/g, ''), ...t.split('_')] : [t])).filter(Boolean);
 
 // peso di ogni campo: una parola nel titolo o nell'id conta più di una nel riassunto
 const PESI = [['titolo', 4], ['id', 3], ['nome', 3], ['type', 2], ['owner', 2], ['workspace', 2], ['repo', 1], ['percorso', 1], ['riassunto', 1]];
@@ -259,7 +263,8 @@ export function punteggio(v, ps) {
     let best = 0;
     for (const [tk, w] of campi) {
       if (tk.includes(p)) best = Math.max(best, w);
-      else if (p.length >= 4 && tk.some((t) => t.startsWith(p) || (t.length >= 5 && p.startsWith(t)))) best = Math.max(best, w / 2);
+      // un nome con underscore si cerca intero: «pagamento» non basta per «pagamento_con_garanzia» (0.6-z22)
+      else if (p.length >= 4 && tk.some((t) => t.startsWith(p) || (!p.includes('_') && t.length >= 5 && p.startsWith(t)))) best = Math.max(best, w / 2);
       else if (p.length >= 5 && tk.some((t) => t.includes(p))) best = Math.max(best, w / 3);
     }
     if (best) { trovate++; score += best; }
@@ -297,3 +302,48 @@ export function leggiIndice(file) {
   return fromTsv(readFileSync(file, 'utf-8'));
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// ricerca nel testo (0.6-z23): quando titolo, id e prima riga non bastano
+
+/**
+ * cerca nel corpo dei doc dell'indice: le frasi esatte (minuscole, senza accenti) e, se non ci sono
+ * frasi, tutte le parole nello stesso doc. Ritorna per ogni doc la prima riga che corrisponde (la
+ * riga con più parole) e la sezione che la contiene: mai il testo della riga, che può contenere
+ * dati personali. Legge solo i file dell'indice, quindi con le sue esclusioni.
+ * @param {object[]} voci
+ * @param {{frasi: string[], parole: string[]}} q
+ * @param {{max?: number, leggi?: Function}} o
+ */
+export function cercaNelTesto(voci, { frasi = [], parole: ps = [] }, { max = 10, leggi = (p) => readFileSync(p, 'utf-8') } = {}) {
+  const fr = frasi.map((f) => norm(f).replace(/\s+/g, ' ').trim()).filter(Boolean);
+  if (!fr.length && !ps.length) return { totale: 0, risultati: [] };
+  const trovati = [];
+  for (const v of voci) {
+    let testo;
+    try { testo = leggi(v.percorso); } catch { continue; }
+    const n = norm(testo);
+    if (fr.length ? !fr.every((f) => n.replace(/\s+/g, ' ').includes(f)) : !ps.every((p) => n.includes(p))) continue;
+    const righe = n.split('\n');
+    let riga = -1;
+    let meglio = 0;
+    for (let i = 0; i < righe.length; i++) {
+      const l = righe[i].replace(/\s+/g, ' ');
+      const k = fr.length ? fr.filter((f) => l.includes(f)).length : ps.filter((p) => l.includes(p)).length;
+      if (k > meglio) { meglio = k; riga = i; }
+    }
+    // una frase che va a capo: nessuna riga la contiene intera, si indica la prima parola
+    if (riga < 0) riga = righe.findIndex((l) => (fr[0] || ps[0]).split(' ').some((w) => w.length > 2 && l.includes(w)));
+    let sezione = '';
+    const originali = testo.replace(/\r\n?/g, '\n').split('\n');
+    for (let i = riga; i >= 0; i--) {
+      const h = (originali[i] || '').match(/^#{1,6}\s+(.+)$/);
+      if (h) { sezione = pulito(testoPiano(h[1]), 80); break; }
+    }
+    if (datiSensibili(sezione)) sezione = '';
+    const occorrenze = fr.length ? fr.reduce((a, f) => a + n.replace(/\s+/g, ' ').split(f).length - 1, 0) : ps.reduce((a, p) => a + n.split(p).length - 1, 0);
+    trovati.push({ ...v, riga: riga + 1, sezione, occorrenze });
+  }
+  trovati.sort((a, b) => (a.stato === 'vivo' ? 0 : 1) - (b.stato === 'vivo' ? 0 : 1) || b.occorrenze - a.occorrenze || String(b.last_updated).localeCompare(String(a.last_updated)) || a.percorso.localeCompare(b.percorso));
+  return { totale: trovati.length, risultati: trovati.slice(0, max) };
+}
