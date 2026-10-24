@@ -23,14 +23,17 @@ import { join, resolve, relative, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { censuraJsonl, censuraTxt } from './lib/censura.mjs';
+import { progettoIUD, percorsoIUD } from './lib/iud.mjs';
 
 function file(dir) {
   const out = [];
+  if (progettoIUD(basename(resolve(dir))) || percorsoIUD(dir)) return out; // --dir su IUD: niente
   const walk = (d) => {
     let es = [];
     try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of es) {
       const p = join(d, e.name);
+      if (progettoIUD(e.name) || percorsoIUD(p)) continue; // IUD: mai letto (0.6-z31)
       if (e.isDirectory()) walk(p);
       else if (e.isFile() && (e.name.endsWith('.jsonl') || (e.name.endsWith('.txt') && p.includes('/tool-results/')))) out.push(p);
     }

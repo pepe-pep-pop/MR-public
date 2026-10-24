@@ -104,6 +104,11 @@ const ieri = new Date(Date.now() - 86400000);
 utimesSync(vecchia, ieri, ieri);
 utimesSync(subag, ieri, ieri);
 const cestino = join(base, 'Cestino');
+// IUD (0.6-z31): progetto dei transcript del giudice, mai letto
+const iud = join(base, 'projects', '-Users-x-IUD', 'cccc3333-0000-0000-0000-000000000000.jsonl');
+mkdirSync(dirname(iud), { recursive: true });
+writeFileSync(iud, riga(`curl -u admin:${PW} https://x.invalid`) + '\n');
+utimesSync(iud, ieri, ieri);
 const run = (...a) => spawnSync(process.execPath, [CLI, '--dir', join(base, 'projects'), ...a], { encoding: 'utf-8' });
 
 test('prova a vuoto: conteggi per file, nessun valore, nessuna scrittura; il recente è marcato', () => {
@@ -114,6 +119,16 @@ test('prova a vuoto: conteggi per file, nessun valore, nessuna scrittura; il rec
   assert(/\| app \| aaaa1111 \| sessione \| 1 \| 1 \| curl -u 1/.test(r.stdout) && /\| app \| aaaa1111 \| subagente \|/.test(r.stdout), r.stdout);
   assert(/\| app \| bbbb2222 \| sessione .*sì \(si salta\)/.test(r.stdout), 'recente');
   assert(readFileSync(vecchia, 'utf-8') === prima, 'scritto senza --write');
+});
+
+test('IUD (0.6-z31): il progetto -Users-x-IUD non si legge, né in prova né con --solo --write; --dir su IUD non dà nulla', () => {
+  const prima = readFileSync(iud, 'utf-8');
+  const r = run('--json');
+  assert(r.status === 0 && !r.stdout.includes('cccc3333') && !r.stdout.includes('IUD'), r.stdout);
+  run('--solo', 'cccc3333', '--write', '--cestino', join(base, 'Cestino-iud'));
+  assert(readFileSync(iud, 'utf-8') === prima && !existsSync(join(base, 'Cestino-iud')), 'IUD toccato');
+  const d = spawnSync(process.execPath, [CLI, '--dir', dirname(iud), '--json'], { encoding: 'utf-8' });
+  assert(!d.stdout.includes('cccc3333'), d.stdout);
 });
 
 test('--write senza --solo rifiutato; --solo con id non valido rifiutato', () => {

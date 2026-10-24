@@ -10,13 +10,14 @@
  */
 
 import { spawnSync, execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, statSync, realpathSync, utimesSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, statSync, realpathSync, utimesSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { conta, misura, esitoTrova, invocazioni, gruppo, settimana } from './uso.mjs';
-import { defaultIndice, INDICE_GL } from './lib/indice.mjs';
-import { parole as pp, titoloERiassunto, datiSensibili, trova, fromTsv, toTsv, cartellaPersonale } from './lib/indicedoc.mjs';
+import { defaultIndice, INDICE_GL, parseIndice } from './lib/indice.mjs';
+import { homedir } from 'node:os';
+import { parole as pp, titoloERiassunto, datiSensibili, trova, fromTsv, toTsv, cartellaPersonale, cercaNelTesto } from './lib/indicedoc.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MR = join(here, 'mr.mjs');
@@ -196,6 +197,18 @@ test('parole (0.6-z22): underscore intero, preposizioni ignorate, sigle di 2 let
   assert(r.risultati.length === 1 && r.risultati[0].percorso === '/a/p.md', JSON.stringify(r.risultati));
 });
 
+test('parole (0.6-z25): trattino e punto tengono il nome intero; underscore nei titoli; corsivo tolto', () => {
+  assert(JSON.stringify(pp('learnworlds-proxy sessioni.tsv sql.sh')) === '["learnworlds-proxy","sessioni.tsv","sql.sh"]', JSON.stringify(pp('learnworlds-proxy sessioni.tsv sql.sh')));
+  assert(JSON.stringify(pp('fine. -inizio (x-)')) === '["fine","inizio"]', JSON.stringify(pp('fine. -inizio (x-)')));
+  const vs = [{ titolo: 'Proxy learnworlds-proxy su Cloudflare', percorso: '/a/lp.md', stato: 'vivo' }, { titolo: 'Proxy di rete', percorso: '/a/p.md', stato: 'vivo' }, { titolo: 'LearnWorlds', percorso: '/a/lw.md', stato: 'vivo' }, { titolo: 'Registro', percorso: '/a/sessioni.tsv.md', stato: 'vivo' }];
+  const r = trova(vs, 'learnworlds-proxy');
+  assert(r.risultati.length === 1 && r.risultati[0].percorso === '/a/lp.md', JSON.stringify(r.risultati.map((v) => v.percorso)));
+  assert(trova(vs, 'proxy').risultati.length === 2 && trova(vs, 'learnworlds').risultati.length === 2, 'parti del nome composto');
+  assert(trova(vs, 'sessioni.tsv').risultati[0].percorso === '/a/sessioni.tsv.md', 'nome con il punto');
+  assert(titoloERiassunto('# La property external_id\n\nUsa _sempre_ pagamento_con_garanzia.\n', 'x.md').titolo === 'La property external_id', 'underscore nel titolo');
+  assert(titoloERiassunto('# T\n\nUsa _sempre_ pagamento_con_garanzia.\n', 'x.md').riassunto === 'Usa sempre pagamento_con_garanzia.', titoloERiassunto('# T\n\nUsa _sempre_ pagamento_con_garanzia.\n', 'x.md').riassunto);
+});
+
 test('trova nel testo (0.6-z23): frase esatta, nome con underscore, --testo; riga e sezione, mai il testo della riga', () => {
   const f = run(MR, 'trova', 'verificabile fino al');
   assert(f.code === 0 && /## Nel testo dei doc — 1 di 1 \(frase esatta: «verificabile fino al»\)/.test(f.out), f.out);
@@ -207,9 +220,98 @@ test('trova nel testo (0.6-z23): frase esatta, nome con underscore, --testo; rig
   const t = JSON.parse(run(MR, 'trova', 'deploy', '--testo', '--json').out);
   assert(t.testo && t.testo.motivo === '--testo' && t.testo.totale >= 1, JSON.stringify(t.testo));
   const n = JSON.parse(run(MR, 'trova', 'deploy', 'vps', '--json').out);
-  assert(n.testo === null, 'testo cercato anche con risultati completi');
+  assert(n.completi >= 1 && n.testo && n.testo.motivo === 'anche nel testo', 'testo cercato anche con risultati completi (0.6-z26)');
   assert(/né nel titolo né nel testo/.test(run(MR, 'trova', 'parolachenonesiste').out), 'nessun risultato');
   assert(run(MR, 'claims', 'x.md', '--testo').code === 2, '--testo fuori da trova');
+});
+
+test('trova (0.6-z26, F2): frase assente → parole in qualunque ordine; prefisso non è completo; testo prima senza completi', () => {
+  const f = JSON.parse(run(MR, 'trova', 'scadenze verificabile', '--json').out);
+  assert(f.testo.motivo.startsWith('nessun doc con la frase') && f.testo.risultati.some((v) => v.percorso.endsWith('procedura.md')), JSON.stringify(f.testo));
+  const vs = [{ titolo: 'Update del deploy', percorso: '/a/u.md', stato: 'vivo' }];
+  const r = trova(vs, 'updateexisting');
+  assert(r.risultati.length === 1 && r.risultati[0].parole_intere === 0, JSON.stringify(r.risultati));
+  const o = run(MR, 'trova', 'introduzione', 'codice_speciale_xyz').out;
+  assert(o.indexOf('## Nel testo dei doc') < o.indexOf('## Per titolo'), o);
+});
+
+test('indice (0.6-z27, F3): status active o draft prevale sulle regole di percorso; fine vita, _out e senza status restano storici', () => {
+  const w = join(base, 'ws3', 'kpi');
+  write(w, 'handoff/hof-kpi-1.md', FM('kpi/hof', 'Handoff KPI'));
+  write(w, 'proposte/fix-registro.md', FM('kpi/proposta', 'Proposta fix registro').replace('status: active', 'status: draft'));
+  write(w, 'doc/emergenza-2026-08/spec.md', FM('kpi/spec', 'Spec emergenza'));
+  write(w, 'proposte/chiusa.md', FM('kpi/chiusa', 'Proposta chiusa').replace('status: active', 'status: superseded'));
+  write(w, 'proposte/senza.md', '# Proposta senza frontmatter\n');
+  write(w, '_out/copia.md', FM('kpi/copia', 'Copia generata'));
+  execFileSync('git', ['init', '-q', w]);
+  execFileSync('git', ['-C', w, 'add', '-A']);
+  execFileSync('git', ['-C', w, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'doc']);
+  const iw = join(base, 'ws3', 'indice.md');
+  write(base, 'ws3/indice.md', ['| slug | gruppo | path | note |', '|---|---|---|---|', `| \`kpi\` | software | \`${w}\` | — |`, ''].join('\n'));
+  const d3 = join(base, 'indice-f3');
+  const r = spawnSync(process.execPath, [MR, 'indice', '--indice', iw, '--write'], { cwd: base, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: d3 } });
+  assert(r.status === 0, r.stderr);
+  const vs = fromTsv(readFileSync(join(d3, 'INDICE_DOC.tsv'), 'utf-8'));
+  const st = (rel) => (vs.find((v) => v.percorso.endsWith(rel)) || {}).stato;
+  assert(st('hof-kpi-1.md') === 'vivo' && st('fix-registro.md') === 'vivo' && st('emergenza-2026-08/spec.md') === 'vivo', JSON.stringify(vs.map((v) => [v.percorso.split('/').pop(), v.stato])));
+  assert(st('chiusa.md') === 'storico' && st('senza.md') === 'storico', 'fine vita o senza status');
+  assert(!st('copia.md') || st('copia.md') === 'storico', '_out');
+});
+
+test('indice (0.6-z29, F5): _out/ fuori; .tsv solo con registro:, titolo dal nome e colonne; cercabile nel testo', () => {
+  const w = join(base, 'ws5', 'reg');
+  write(w, 'README.md', FM('reg/readme', 'Registri'));
+  write(w, '_out/copia.md', FM('reg/copia', 'Copia generata'));
+  write(w, 'registro/workflow.tsv', 'workflow\tproperty_lette\tproperty_scritte\nwf1\tpercorso_didattico_3_0\tx\n');
+  write(w, 'export/lead.tsv', 'nome\temail\nMario\tmario@example.com\n');
+  write(w, 'mr.claims.ignore', 'registro:registro/*.tsv\nregistro:export/*.tsv\n');
+  execFileSync('git', ['init', '-q', w]);
+  execFileSync('git', ['-C', w, 'add', '-A']);
+  execFileSync('git', ['-C', w, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'doc']);
+  write(base, 'ws5/indice.md', ['| slug | gruppo | path | note |', '|---|---|---|---|', `| \`reg\` | software | \`${w}\` | — |`, ''].join('\n'));
+  const d5 = join(base, 'indice-f5');
+  const env5 = { ...process.env, MR_INDICE_DIR: d5, MR_INDICE_ARCH: join(base, 'ws5', 'indice.md') };
+  const r = spawnSync(process.execPath, [MR, 'indice', '--indice', join(base, 'ws5', 'indice.md'), '--write'], { cwd: base, encoding: 'utf-8', env: env5 });
+  assert(r.status === 0 && /generati \(_out\/\) 1/.test(r.stdout), r.stdout + r.stderr);
+  const t = readFileSync(join(d5, 'INDICE_DOC.tsv'), 'utf-8');
+  const vs = fromTsv(t);
+  const wf = vs.find((v) => v.percorso.endsWith('workflow.tsv'));
+  assert(wf && wf.type === 'registro' && wf.titolo === 'workflow.tsv' && wf.riassunto === 'colonne: workflow, property_lette, property_scritte', JSON.stringify(wf));
+  assert(!vs.some((v) => v.percorso.includes('_out/')), '_out nell\'indice');
+  assert(!vs.some((v) => v.percorso.endsWith('lead.tsv')) && !t.includes('example.com'), 'export con dati personali indicizzato');
+  const q = JSON.parse(spawnSync(process.execPath, [MR, 'trova', 'percorso_didattico_3_0', '--json'], { cwd: base, encoding: 'utf-8', env: env5 }).stdout);
+  assert(q.testo.risultati.length === 1 && q.testo.risultati[0].percorso.endsWith('workflow.tsv') && q.testo.risultati[0].riga === 2, JSON.stringify(q.testo));
+});
+
+test('IUD (0.6-z31): uso.mjs non conta il progetto -Users-x-IUD; parseIndice spegne un workspace in ~/IUD', () => {
+  const dir = join(base, 'projects-iud');
+  const ts = new Date().toISOString();
+  const riga = (id, cmd) => JSON.stringify({ timestamp: ts, message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command: cmd } }] } });
+  write(dir, '-Users-x-GL--code--soft-app-web/a.jsonl', riga('t1', 'node mr.mjs trova deploy'));
+  write(dir, '-Users-x-IUD/b.jsonl', [riga('t2', 'node mr.mjs trova deploy'), riga('t3', 'node mr.mjs impact x.ts')].join('\n'));
+  const m = misura(dir, { settimane: 1 });
+  const tot = m.settimane.reduce((n, r) => n + r.trova + r.impact, 0);
+  assert(tot === 1, JSON.stringify(m.settimane));
+  assert(misura(join(dir, '-Users-x-IUD'), { settimane: 1 }).settimane.length === 0, '--dir su IUD');
+  const ws = parseIndice(['| slug | gruppo | path | note |', '|---|---|---|---|', `| \`iud\` | software | \`${join(homedir(), 'IUD')}\` | — |`, `| \`app\` | software | \`${app}\` | — |`, ''].join('\n'));
+  assert(!ws[0].attivo && /IUD/.test(ws[0].motivo) && ws[1].attivo, JSON.stringify(ws));
+});
+
+test('trova (0.6-z32, F): nel testo bastano 2 parole, in ordine di parole trovate; frase esatta poi parole sparse', () => {
+  const vs = [
+    { titolo: 'A', percorso: '/a/due.md', stato: 'vivo' },
+    { titolo: 'B', percorso: '/a/tre.md', stato: 'vivo' },
+    { titolo: 'C', percorso: '/a/una.md', stato: 'vivo' },
+    { titolo: 'D', percorso: '/a/frase.md', stato: 'vivo' },
+  ];
+  const testi = { '/a/due.md': 'sync e token\n', '/a/tre.md': 'il token del hook di sync\n', '/a/una.md': 'solo token\n', '/a/frase.md': 'cerca «sync hook token» qui\n' };
+  const r = cercaNelTesto(vs, { frasi: [], parole: ['sync', 'hook', 'token'] }, { leggi: (p) => testi[p] });
+  assert(r.risultati.map((v) => v.percorso).join(',') === '/a/frase.md,/a/tre.md,/a/due.md' || r.risultati[0].parole_nel_testo === 3, JSON.stringify(r.risultati.map((v) => [v.percorso, v.parole_nel_testo])));
+  assert(!r.risultati.some((v) => v.percorso === '/a/una.md') && r.completi === 2 && r.risultati.find((v) => v.percorso === '/a/due.md').parole_nel_testo === 2, JSON.stringify(r));
+  const o = JSON.parse(run(MR, 'trova', 'scadenze introduzione', '--json').out);
+  assert(o.testo.risultati.some((v) => v.percorso.endsWith('procedura.md')), JSON.stringify(o.testo));
+  const f = JSON.parse(run(MR, 'trova', 'passo per passo', 'vps', '--json').out);
+  assert(f.testo.motivo === 'frase esatta, poi parole sparse', f.testo.motivo);
 });
 
 test('trova: indice mancante → errore chiaro, exit 2', () => {
@@ -222,6 +324,7 @@ test('trova (0.6-z24): indice assente o di più di un giorno → rigenerato; fre
   const d = join(base, 'indice-rinnovo');
   const tsv = join(d, 'INDICE_DOC.tsv');
   const t = (...a) => spawnSync(process.execPath, [MR, 'trova', 'deploy', ...a], { cwd: base, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: d, MR_INDICE_ARCH: indiceWs } });
+  const runIndiceInTest = () => spawnSync(process.execPath, [MR, 'indice', '--indice', indiceWs, '--write'], { cwd: base, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: d } });
   const r1 = t();
   assert(r1.status === 0 && /Indice rigenerato/.test(r1.stdout) && existsSync(tsv), `${r1.status} ${r1.stdout} ${r1.stderr}`);
   assert(!/Indice rigenerato/.test(t().stdout), 'rigenerato anche se fresco');
@@ -231,6 +334,26 @@ test('trova (0.6-z24): indice assente o di più di un giorno → rigenerato; fre
   const j = JSON.parse(t('--json').stdout);
   assert(j.rinnovo && j.rinnovo.doc > 0 && statSync(tsv).mtime.getTime() > Date.now() - 60000, JSON.stringify(j.rinnovo));
   assert(run(MR, 'claims', 'x.md', '--senza-rinnovo').code === 2, '--senza-rinnovo fuori da trova');
+  // 0.6-z28 (F4): doc più nuovo dell'indice → rigenerato, ma solo se l'indice ha almeno 10 minuti
+  const fa = (min) => new Date(Date.now() - min * 60000);
+  utimesSync(tsv, fa(5), fa(5));
+  assert(!/Indice rigenerato/.test(t().stdout), 'rigenerato con indice di 5 minuti');
+  utimesSync(tsv, fa(20), fa(20));
+  const r2 = t();
+  assert(/Indice rigenerato: un doc è cambiato dopo l'indice/.test(r2.stdout), r2.stdout);
+  utimesSync(tsv, fa(20), fa(20));
+  for (const v of fromTsv(readFileSync(tsv, 'utf-8'))) { utimesSync(v.percorso, fa(30), fa(30)); }
+  const nuovo = join(app, 'docs', 'nuovo-z28.md');
+  write(app, 'docs/nuovo-z28.md', '# Doc nuovo\n');
+  utimesSync(nuovo, fa(30), fa(30));
+  const r3 = t();
+  assert(/Indice rigenerato: una cartella dei doc ha file nuovi/.test(r3.stdout), r3.stdout);
+  assert(/indice del \d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(r3.stdout), 'data e ora locali');
+  unlinkSync(nuovo); // file di prova nella cartella temporanea del test: gli altri test contano 7 doc
+  runIndiceInTest();
+  utimesSync(tsv, fa(20), fa(20));
+  for (const v of fromTsv(readFileSync(tsv, 'utf-8'))) { utimesSync(v.percorso, fa(30), fa(30)); utimesSync(dirname(v.percorso), fa(30), fa(30)); }
+  assert(!/Indice rigenerato/.test(t().stdout), 'rigenerato senza doc cambiati');
 });
 
 test('giro: completo con --write riscrive l\'indice; parziale (--only) no', () => {

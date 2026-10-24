@@ -105,6 +105,18 @@ segreti e gli indirizzi email sono omessi (N4).
 doc e sezioni da ricontrollare:
 - link il cui file è toccato: «simbolo toccato» se le righe cambiate cadono nel simbolo, «file toccato (simbolo no)» altrimenti; più «simbolo non più trovato» e «file cancellato»;
 - claim: path che corrispondono a un file toccato (solo file, un nome nudo solo se unico nel repo); nomi (env, simboli) nelle righe cambiate; tabelle come testo esatto o nei file di schema; endpoint nelle righe cambiate.
+- **piste in più** (0.6-z30, dalla prova degli strumenti), in una sezione a parte e fuori dal conteggio «da ricontrollare»: `percorso:riga` (`src/app.ts:42`), link markdown al file (relativi al doc), path in una riga a forma di comando dentro un blocco di codice (non gli alberi di file), cartella citata che contiene il file (solo cartelle di al più 30 file), nome del file da solo (unico nel repo, o con il doc nella sua cartella o sopra; non `index`/`main`/`utils`…), cartella di un `index.*` citata col solo nome (`annullo-chiacchierata` per `…/annullo-chiacchierata/index.ts`). Nel JSON hanno `via: "riferimento"`.
+  Dalla z34 anche i **nomi definiti dal file** citati nel doc tra backtick: funzioni e costanti esportate, funzioni di primo livello, `def`/`class` Python, `pub fn` Rust (almeno 5 lettere, non `handler`/`main`/`config`…); le **rotte** che il file registra (`app.get('/api/edizioni')`, almeno due segmenti, senza `*`), anche senza backtick; le **variabili d'ambiente** che legge (`process.env.X`, `Deno.env.get`, `os.environ`). Con un diff contano solo quelli nelle righe cambiate.
+
+**Repo contenitori** (0.6-z33): senza `--docs`, impact guarda anche i doc dei repo che contengono quello del
+codice, risalendo le cartelle: il contenitore di un submodule o di un repo annidato (es. `Simulatore IOS` per
+`medquiz-web`), poi il repo ombrello GL. Le loro voci hanno il nome del repo davanti al doc (`[GL] _code/…`) e
+l'intestazione dice quanti doc ha esaminato in ognuno. Mai sopra la home, mai in `~/IUD`.
+**Altri repo** (0.6-z35): sempre senza `--docs`, impact legge anche i doc vivi dell'indice dei doc
+(`~/.mr/indice/INDICE_DOC.tsv`, senza rinnovarlo) che stanno in altri repo e **nominano il repo del codice**
+(nome della cartella, anche con `-` o `_` al posto degli spazi). Voci con `[repo]` davanti e `fuori_repo: true`;
+l'intestazione dice quanti doc in quanti repo. Spento anche questo da `--senza-contenitori`.
+`--senza-contenitori` lo spegne.
 
 I `.md` toccati non contano (i legami doc ↔ doc sono di `mr-scanner`), salvo `--include-docs`.
 `--fail` dà exit 1 solo se è toccata un'ancora (dalla 0.6-t): i path e i nomi citati dai claim e le
@@ -121,6 +133,19 @@ sottocartella). Il comando non è nel PATH. Colonne della tabella:
 I doc storici in coda sono solo informativi. Con molti doc l'output è lungo: `--format json`, oppure
 leggi solo la tabella in testa. Un `.md` come bersaglio non dà errore, ma non trova nulla: impact
 guarda il codice.
+
+**Cosa impact non può vedere** (0.6-z36, dalla prova degli strumenti):
+- **Un doc che descrive il codice senza citarlo:** non dà il percorso, il nome del file, un nome che il file
+  definisce, una rotta o una variabile. Impact cerca citazioni, non significati, e non ha un modello.
+  **Regola consigliata ai workspace:** in ogni doc che descrive un file di codice, cita almeno una volta il suo
+  percorso dalla radice del repo, tra backtick (es. `src/routes/enter.ts`). Meglio ancora un'ancora
+  (`mr suggest-links`), che dà anche la deriva. Con il percorso il doc entra in «da ricontrollare»; con un nome
+  o una cartella resta tra le piste.
+- **Chi legge o scrive una property HubSpot:** non lo dice il codice di un repo, lo dice il registro dei
+  workflow. Si cerca con `mr trova <nome_property>`: il registro
+  (`HubSpot/_knowledge_base/registro-workflow/workflow.tsv`, colonne `property_lette` e `property_scritte`) è
+  nell'indice dalla z29 (regola `registro:` di arch), e la sezione «Nel testo dei doc» dà la riga del workflow.
+  Esempio: `mr trova percorso_didattico_3_0` → `workflow.tsv`, riga 32.
 
 ## verify — verifica e aggiornamento di `verified` (R7)
 
@@ -216,11 +241,17 @@ lavora, non solo per chi mantiene i doc.
   working tree, perché il percorso deve aprire il file sul disco. Una riga per doc: `id`, `titolo`, `type`,
   `owner`, `status`, `last_updated`, `percorso` (assoluto), `riassunto` (prima riga di testo del corpo),
   `stato` (`vivo` o `storico`), `workspace`, `repo`. Storico = storico per path come nel giro, regola
-  `storico:`, status di fine vita o cartella d'archivio.
+  `storico:`, status di fine vita o cartella d'archivio. Dalla z27 uno status `active` o `draft` nel frontmatter
+  prevale sulle regole di percorso (`hof-*`, `proposte/`, cartelle datate…): il doc è vivo. Restano storici i
+  generati (`_out/`) e le regole `storico:`. Vale solo per l'indice: il giro non cambia.
   - **Fuori:** file di segreti, regole `codice:` e `doc:`, fixture, workspace in archivio, cartelle
     con dati personali (`candidati/`, `studenti/`, `lead/`, `contatti/`, `export/`…, più le regole
     `personali:<glob>` del `mr.claims.ignore` o dell'allow-list centrale). Si leggono solo `.md`: mai
-    CSV o export.
+    CSV o export. Dalla z29 fuori anche i generati in `_out/` e `_output*/`, copie di doc che stanno altrove.
+  - **Registri `.tsv`** (0.6-z29): entrano solo se una regola `registro:<glob>` del `mr.claims.ignore` o
+    dell'allow-list centrale li nomina, perché un `.tsv` qualunque può essere un export. Titolo = nome del file,
+    type `registro`, riassunto = colonne dell'intestazione. `trova` li cerca anche nel testo e dà la riga,
+    mai il testo. Le cartelle di dati personali restano fuori anche con la regola.
   - **Testo:** titolo e riassunto si scartano se contengono un'email, un telefono, un codice fiscale,
     un IBAN o una forma di segreto. Caratteri di controllo tolti sia nel TSV sia nella stampa.
   - **Scrittura:** solo con `--write`, in `~/.mr/indice/INDICE_DOC.tsv` (`MR_INDICE_DIR` per un'altra
@@ -236,18 +267,25 @@ lavora, non solo per chi mantiene i doc.
   `--owner`, `--type` (esatto), `--repo` (repo o workspace). Circa 0,1 secondi. Nessun modello: se non
   basta si valuta una ricerca semantica (qmd).
   - **Rinnovo automatico** (0.6-z24, sì di il maintainer del 22/10): se l'indice manca o ha più di un giorno,
-    `trova` lo rigenera prima di cercare, come `mr indice --write` (circa 2 secondi, scrive solo il TSV in
-    `~/.mr/indice/`), e lo dice nell'output: «Indice rigenerato». È l'unica scrittura di MR senza
+    oppure (dalla z28) ha almeno 10 minuti e un suo doc è cambiato dopo o una sua cartella ha file nuovi
+    (solo `stat`, circa 0,1 secondi), `trova` lo rigenera prima di cercare, come `mr indice --write` (circa 2 secondi, scrive solo il TSV in
+    `~/.mr/indice/`), e lo dice nell'output: «Indice rigenerato», con il motivo. La data dell'indice è in ora locale. È l'unica scrittura di MR senza
     `--write`. `--senza-rinnovo` la evita. Se il rinnovo fallisce, o l'indice di arch non c'è, cerca
     nell'indice che c'è; oltre 7 giorni avvisa.
   - **Risultati parziali** (0.6-z21): con più parole, se nessun doc le contiene tutte, l'output lo dice.
     I risultati che contengono solo una parte delle parole vanno trattati come «nessun risultato», se
     non c'entrano col tema. Una parola che non c'è in nessun doc dà 0 risultati.
-  - **Nel testo dei doc** (0.6-z23): con una frase tra virgolette (`trova "verificabile fino al"`), con
-    `--testo`, o quando nessun doc dell'indice ha tutte le parole nel titolo, nell'id o nella prima riga,
-    `trova` cerca anche nel corpo dei doc dell'indice, con le stesse esclusioni. Stampa il doc, la riga e la
+  - **Nel testo dei doc** (0.6-z23; sempre dalla z26): `trova` cerca anche nel corpo dei doc dell'indice, con
+    le stesse esclusioni, e stampa la sezione «Nel testo dei doc» anche quando ci sono risultati per titolo.
+    La sezione va prima con una frase tra virgolette (`trova "verificabile fino al"`) o quando nessun doc ha
+    tutte le parole intere nel titolo, nell'id o nella prima riga (un prefisso, «update» per
+    `updateExisting`, non basta). Una frase che non compare in nessun doc si ricerca come parole in
+    qualunque ordine. Dalla z32 nel testo bastano 2 parole su più (con una parola, quella), in ordine di parole
+    trovate («2 parole su 3» nella riga); con una frase tra virgolette, dopo i doc con la frase vengono quelli
+    con le parole sparse, perché spesso la frase sta solo in chi riporta la ricerca. `--testo` resta accettato. Stampa il doc, la riga e la
     sezione, mai il testo della riga, che può contenere dati personali. Un nome con underscore
-    (`pagamento_con_garanzia`) è una parola sola. Circa 0,4 secondi su 2400 doc.
+    (`pagamento_con_garanzia`), trattino o punto (`learnworlds-proxy`, `sessioni.tsv`, dalla z25) è una parola
+    sola, cercata intera; le sue parti si cercano anche da sole (`proxy`). Circa 0,4 secondi su 2400 doc.
   - **Da qualunque cartella:** l'indice copre tutti i workspace attivi, quindi `trova` non dipende
     dalla cartella da cui si lancia.
 - **`uso.mjs`** (dalla z20 anche skill `chi-sa-cosa`, ricerche vuote, «doc aperto dopo» entro 30 minuti, e `--dettaglio` per giorno e progetto): conta nei transcript di Claude Code (`~/.claude/projects`) i comandi Bash che lanciano
@@ -363,7 +401,8 @@ gli esiti si calcolano, ma non danno segnali né exit code 1; nel report c'è un
 
 `mr.claims.ignore` nella root del repo dei doc, oppure `--ignore-file`. Righe: testo esatto,
 glob con `*`, `tipo:pattern` (es. `env:VITE_*`), `doc:<glob>`, `storico:<glob>`, `codice:<glob>`,
-`personali:<glob>` (cartelle con dati personali, fuori dall'indice dei doc, 0.6-z17). Nel doc,
+`personali:<glob>` (cartelle con dati personali, fuori dall'indice dei doc, 0.6-z17), `registro:<glob>` (registri `.tsv`
+da mettere nell'indice dei doc, 0.6-z29). Nel doc,
 `<!-- mr:ignore-claim -->` esclude la riga.
 
 ## Prestazioni (N5)

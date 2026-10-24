@@ -22,7 +22,8 @@
  */
 
 import { readdirSync, readFileSync, statSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { progettoIUD, percorsoIUD } from './lib/iud.mjs';
+import { join, resolve, basename } from 'node:path';
 import { homedir } from 'node:os';
 
 const SOTTOCOMANDI = ['trova', 'impact', 'indice', 'claims', 'scan', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi', 'env', 'stato'];
@@ -62,11 +63,13 @@ export function invocazioni(cmd) {
 
 function jsonl(dir) {
   const out = [];
+  if (progettoIUD(basename(resolve(dir))) || percorsoIUD(dir)) return out; // --dir su IUD: niente
   const walk = (d) => {
     let es = [];
     try { es = readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of es) {
       const p = join(d, e.name);
+      if (progettoIUD(e.name) || percorsoIUD(p)) continue; // IUD: mai letto (0.6-z31)
       if (e.isDirectory()) walk(p);
       else if (e.isFile() && e.name.endsWith('.jsonl')) out.push(p);
     }
@@ -106,8 +109,10 @@ export function misura(dir, { settimane = 4, ora = new Date() } = {}) {
     for (const x of Object.keys(c)) r[x] += c[x];
     mappa.set(k, r);
   };
+  if (progettoIUD(basename(resolve(dir))) || percorsoIUD(dir)) return { settimane: [], giorni: [] }; // --dir su IUD: niente
   for (const progetto of readdirSync(dir)) {
     const pdir = join(dir, progetto);
+    if (progettoIUD(progetto) || percorsoIUD(pdir)) continue; // IUD: mai letto, nemmeno con stat (0.6-z31)
     if (!statSync(pdir).isDirectory()) continue;
     const g = gruppo(progetto);
     const nome = nomeProgetto(progetto);

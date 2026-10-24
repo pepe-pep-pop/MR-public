@@ -48,6 +48,8 @@ function assert(c, m) {
 console.log('\ntest-codice.mjs\n');
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'mr-codice-')));
+// 0.6-z35: impact legge l'indice dei doc (B ridotto): nei test un indice vuoto, mai quello della macchina
+process.env.MR_INDICE_DIR = join(root, '.indice-vuoto');
 execFileSync('git', ['init', '-q', root]);
 write(root, 'src/lib/hubspot.server.ts', 'export function valore(d) {\n  return d.amount;\n}\n');
 write(root, 'ref/src/lib/hubspot.server.ts', 'export function buildConversions() {\n  return 1;\n}\nconst solo_nel_riferimento = 1;\n');
@@ -269,6 +271,88 @@ test('impact (0.6-u): un path dentro un comando tra backtick conta come path cit
   const p = j.items.filter((i) => i.doc === 'docs/pubblica.md');
   assert(p.length === 2 && p.every((i) => i.reason === 'path citato in un comando: file toccato' && i.ref === 'ops/ci-command.sh') && p.map((i) => i.line).join(',') === '3,5', JSON.stringify(p));
   assert(run(root, 'impact', 'HEAD', '--fail').code === 0, 'resta un claim: non cambia --fail');
+});
+
+test('impact (0.6-z30, F6): path:riga, link markdown, comando in un blocco, cartella citata, nome del file, cartella di index.*', () => {
+  write(root, 'tools/intake/riduci_classmarker.py', 'x = 1\n');
+  write(root, 'services/xero-twin/src/main.rs', 'fn main() {}\n');
+  write(root, 'supabase/functions/annullo-chiacchierata/index.ts', 'export const a = 1;\n');
+  write(root, 'docs/f6b.md', '# Servizio\n\nTutto sta in `services/xero-twin/`.\n');
+  write(root, 'docs/f6.md', ['# F6', '', 'Vedi `tools/intake/riduci_classmarker.py:42`.', '', 'Il [riduttore](../tools/intake/riduci_classmarker.py) fa il resto.', '', '```bash', 'python3 tools/intake/riduci_classmarker.py --in a', '```', '', 'Tutto il servizio sta in `services/xero-twin/`.', '', 'Lo script `riduci_classmarker.py` gira di notte.', '', 'La funzione `annullo-chiacchierata` annulla.', ''].join('\n'));
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'f6');
+  write(root, 'tools/intake/riduci_classmarker.py', 'x = 2\n');
+  write(root, 'services/xero-twin/src/main.rs', 'fn main() { }\n');
+  write(root, 'supabase/functions/annullo-chiacchierata/index.ts', 'export const a = 2;\n');
+  git(root, 'commit', '-q', '-am', 'f6 cambia');
+  const j = JSON.parse(run(root, 'impact', 'HEAD', '--format', 'json').out);
+  const p = j.items.filter((i) => i.doc === 'docs/f6.md');
+  const r = (line) => (p.find((i) => i.line === line) || {}).reason;
+  assert(r(3) === 'path:riga citato' && r(5) === 'link markdown al file' && r(8) === 'path in un comando di un blocco di codice', JSON.stringify(p));
+  assert(r(11) === 'cartella citata: contiene il file' && r(13) === 'path citato: file toccato' && r(15) === 'cartella di un index.* citata', JSON.stringify(p));
+  assert(p.length === 6, JSON.stringify(p));
+  const md = run(root, 'impact', 'HEAD').out;
+  assert(/piste in più: 1/.test(md) && /## Piste in più/.test(md) && /`docs\/f6b.md` — riga 3 \(cartella citata: contiene il file\)/.test(md), md);
+});
+
+test('impact (0.6-z33, A): risale ai repo contenitori; [repo] davanti al doc; --senza-contenitori e --docs no', () => {
+  const ombrello = realpathSync(mkdtempSync(join(tmpdir(), 'mr-ombrello-')));
+  const sub = join(ombrello, 'app-web');
+  write(sub, 'src/hooks/useQuiz.ts', 'export const q = 1;\n');
+  write(sub, 'README.md', '# App\n');
+  git(sub, 'init', '-q');
+  git(sub, 'add', '-A');
+  git(sub, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'app');
+  write(ombrello, 'doc/piano.md', '# Piano\n\nIl quiz sta in `app-web/src/hooks/useQuiz.ts`.\n');
+  write(ombrello, '.gitignore', 'app-web/\n');
+  git(ombrello, 'init', '-q');
+  git(ombrello, 'add', '-A');
+  git(ombrello, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'ombrello');
+  const nome = ombrello.split('/').pop();
+  const j = JSON.parse(run(sub, 'impact', 'src/hooks/useQuiz.ts', '--format', 'json').out);
+  assert(j.contenitori.some((c) => c.repo === nome) && j.items.some((i) => i.doc === `[${nome}] doc/piano.md` && i.reason === 'path citato: file toccato'), JSON.stringify(j));
+  const md = run(sub, 'impact', 'src/hooks/useQuiz.ts').out;
+  assert(md.includes(`nei repo contenitori`) && md.includes(`[${nome}] doc/piano.md`), md);
+  assert(!JSON.parse(run(sub, 'impact', 'src/hooks/useQuiz.ts', '--senza-contenitori', '--format', 'json').out).items.length, '--senza-contenitori');
+  rmSync(ombrello, { recursive: true, force: true });
+});
+
+test('impact (0.6-z34, D): nomi esportati, rotte e variabili d\'ambiente del file citati per nome → piste', () => {
+  write(root, 'server/src/edizioni.ts', ['export async function creaIscrizione(a) { return a; }', 'export const LIMITE_POSTI = 3;', 'app.get("/api/edizioni", h);', 'router.post("/api/edizioni/:id/iscrivi", h);', 'const k = process.env.STRIPE_KEY;', ''].join('\n'));
+  write(root, 'docs/DECISIONI.md', ['# Decisioni', '', 'La funzione `creaIscrizione()` controlla i posti.', '', 'Il tetto è `LIMITE_POSTI`.', '', 'Il portale chiama GET /api/edizioni ogni minuto.', '', 'Per iscriversi: `POST /api/edizioni/42/iscrivi`.', '', 'Serve `STRIPE_KEY`.', '', 'Nessun legame: `handler` e /api/edizionivecchie.', ''].join('\n'));
+  git(root, 'add', '-A');
+  git(root, 'commit', '-q', '-m', 'edizioni');
+  const j = JSON.parse(run(root, 'impact', 'server/src/edizioni.ts', '--format', 'json').out);
+  const p = j.items.filter((i) => i.doc === 'docs/DECISIONI.md');
+  const r = (line) => (p.find((i) => i.line === line) || {}).reason;
+  assert(r(3) === 'nome definito nel file citato' && r(5) === 'nome definito nel file citato', JSON.stringify(p));
+  assert(r(7) === 'rotta definita nel file citata' && r(9) === 'rotta definita nel file citata' && r(11) === 'variabile d\'ambiente letta dal file citata', JSON.stringify(p));
+  assert(!r(13) && p.length === 5, JSON.stringify(p));
+  const md = run(root, 'impact', 'server/src/edizioni.ts').out;
+  assert(/piste in più: 1/.test(md), md);
+});
+
+test('impact (0.6-z35, B): doc di un altro repo dall\'indice dei doc, solo se nomina il repo', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'mr-fuori-')));
+  const app = join(base, 'Landing App');
+  write(app, 'ops/cf-token-keychain.sh', '#!/bin/sh\necho 1\n');
+  write(app, 'README.md', '# App\n');
+  const altro = join(base, 'vps');
+  write(altro, 'doc/runbook.md', '# Runbook\n\nIn Landing App lo script `ops/cf-token-keychain.sh` legge il token.\n');
+  write(altro, 'doc/altro.md', '# Altro\n\nLo script `ops/cf-token-keychain.sh` di un altro progetto.\n');
+  for (const r of [app, altro]) {
+    git(r, 'init', '-q');
+    git(r, 'add', '-A');
+    git(r, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', 'x');
+  }
+  const dirIdx = join(base, 'indice');
+  const voce = (p) => ['', 'T', '', '', '', '', p, '', 'vivo', 'vps', 'vps'].join('\t');
+  write(dirIdx, 'INDICE_DOC.tsv', ['id\ttitolo\ttype\towner\tstatus\tlast_updated\tpercorso\triassunto\tstato\tworkspace\trepo', voce(join(altro, 'doc/runbook.md')), voce(join(altro, 'doc/altro.md')), ''].join('\n'));
+  const r = spawnSync(process.execPath, [MR, 'impact', 'ops/cf-token-keychain.sh', '--format', 'json'], { cwd: app, encoding: 'utf-8', env: { ...process.env, MR_INDICE_DIR: dirIdx } });
+  const j = JSON.parse(r.stdout);
+  assert(j.items.some((i) => i.doc === '[vps] doc/runbook.md' && i.fuori_repo) && !j.items.some((i) => i.doc.includes('altro.md')), JSON.stringify(j.items));
+  assert(j.fuori_repo.docs === 1 && j.fuori_repo.repo === 1, JSON.stringify(j.fuori_repo));
+  rmSync(base, { recursive: true, force: true });
 });
 
 test('impact (0.6-u): funzione TS con tipo di ritorno a oggetto scritto per esteso — il corpo è il simbolo', () => {

@@ -219,6 +219,29 @@ function overlaps(ranges, start, end) {
  * @param {object[]} [rules] - regole di mr.claims.ignore del repo dei doc: storico:<glob> marca i doc
  *        storici come nel giro e in scan (0.6-u)
  */
+// 0.6-z34 (D): nomi che un file definisce (esportati, top-level in Python e Rust), rotte e variabili
+// d'ambiente che legge. Un doc che li cita per nome è una pista in più.
+const NOMI_GENERICI = new Set(['default', 'handler', 'main', 'config', 'index', 'router', 'app', 'server', 'client', 'types', 'props', 'utils', 'helpers', 'constants', 'state', 'error', 'result', 'value', 'data']);
+export function nomiDefiniti(content) {
+  const nomi = new Set();
+  const rotte = new Set();
+  const env = new Set();
+  const add = (set, x) => { if (x && x.length >= 5 && !NOMI_GENERICI.has(x.toLowerCase())) set.add(x); };
+  for (const m of content.matchAll(/^\s*export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm)) add(nomi, m[1]);
+  // funzioni dichiarate al primo livello, anche non esportate (scheduler.ts di onboarding-c)
+  for (const m of content.matchAll(/^(?:async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/gm)) add(nomi, m[1]);
+  for (const m of content.matchAll(/^export\s*\{([^}]+)\}/gm)) for (const x of m[1].split(',')) add(nomi, x.trim().split(/\s+as\s+/).pop());
+  for (const m of content.matchAll(/^(?:async\s+)?def\s+([A-Za-z_]\w*)|^class\s+([A-Za-z_]\w*)/gm)) if (!(m[1] || m[2]).startsWith('_')) add(nomi, m[1] || m[2]);
+  for (const m of content.matchAll(/^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|const|trait)\s+([A-Za-z_]\w*)/gm)) add(nomi, m[1]);
+  for (const m of content.matchAll(/\.(?:get|post|put|patch|delete|all|use|route)\(\s*['"`](\/[^'"`\s]*)['"`]/g)) {
+    // solo rotte di almeno due segmenti e senza *: `/admin`, `/health`, `/api/*` sono troppo comuni
+    const r = m[1].replace(/\/+$/, '');
+    if (!r.includes('*') && r.split('/').filter(Boolean).length >= 2) rotte.add(r);
+  }
+  for (const m of content.matchAll(/(?:process\.env\.|Deno\.env\.get\(\s*['"]|os\.environ(?:\.get)?\(?\[?\s*['"]|getenv\(\s*['"]|env::var\(\s*"|import\.meta\.env\.)([A-Z][A-Z0-9_]{3,})/g)) add(env, m[1]);
+  return { nomi, rotte, env };
+}
+
 export function findImpacted(docRepo, docRels, codeRepo, touched, newRev, rules = []) {
   const repoName = codeRepo.root.split('/').pop();
   const sameRepo = docRepo.root === codeRepo.root;
@@ -249,6 +272,27 @@ export function findImpacted(docRepo, docRels, codeRepo, touched, newRev, rules 
       }
     }
     return baseCounts.get(name) || 0;
+  };
+
+  // nomi definiti per file toccato (0.6-z34): con un diff solo quelli nelle righe cambiate
+  const defCache = new Map();
+  const definiti = (t) => {
+    if (!defCache.has(t.path)) {
+      const c = newContent(t.path);
+      let d = null;
+      if (c !== null) {
+        d = nomiDefiniti(c);
+        if (!t.whole) for (const k of ['nomi', 'rotte', 'env']) d[k] = new Set([...d[k]].filter((x) => t.tokens.has(x) || t.text.some((l) => l.includes(x))));
+        if (!d.nomi.size && !d.rotte.size && !d.env.size) d = null;
+      }
+      defCache.set(t.path, d);
+    }
+    return defCache.get(t.path);
+  };
+  const sotto = new Map();
+  const fileSotto = (dir) => {
+    if (!sotto.has(dir)) sotto.set(dir, codeRepo.listFiles().filter((f) => f.startsWith(dir + '/')).length);
+    return sotto.get(dir);
   };
 
   for (const doc of docRels) {
@@ -325,6 +369,94 @@ export function findImpacted(docRepo, docRels, codeRepo, touched, newRev, rules 
           seen.add(`${k + 1}|${f.path}`);
           push({ line: k + 1, section, via: 'claim path', ref: tok, touched: f.path, reason: f.deleted ? 'path citato in un comando: file cancellato' : 'path citato in un comando: file toccato' });
         }
+      }
+    });
+
+    // 0.6-z34 (D): nomi, rotte e variabili d'ambiente definiti o letti dal file toccato, citati nel doc.
+    // Con un diff contano solo quelli che compaiono nelle righe cambiate; con un file intero, tutti.
+    {
+      let inBlocco = false;
+      let sez = '';
+      docLines.forEach((l, k) => {
+        if (/^\s*(```|~~~)/.test(l)) { inBlocco = !inBlocco; return; }
+        const hh = !inBlocco && l.match(/^(#{1,6})\s+(.+?)\s*$/);
+        if (hh) sez = `${hh[1]} ${hh[2]}`;
+        if (inBlocco || /<!--\s*mr:ignore-claim\s*-->/.test(l)) return;
+        const spans = [...l.matchAll(/`([^`]+)`/g)].map((m) => m[1].trim());
+        for (const t of touchedList) {
+          if (t.deleted || seen.has(`${k + 1}|${t.path}`)) continue;
+          const d = definiti(t);
+          if (!d) continue;
+          let hit = null;
+          for (const sp of spans) {
+            const nome = sp.replace(/\(\)?$/, '').replace(/^.*\./, '');
+            if (d.nomi.has(nome)) { hit = [sp, 'nome definito nel file citato']; break; }
+            if (d.env.has(sp)) { hit = [sp, 'variabile d\'ambiente letta dal file citata']; break; }
+          }
+          if (!hit) for (const r of d.rotte) if (new RegExp(`(^|[\\s\`'"(])${r.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/:\\w+|\\\[[^\\]]+\\\]/g, '[^\\s/`]+')}(?=$|[\\s\`'")?/#,.:;])`).test(l)) { hit = [r, 'rotta definita nel file citata']; break; }
+          if (!hit) continue;
+          seen.add(`${k + 1}|${t.path}`);
+          push({ line: k + 1, section: sez, via: 'riferimento', ref: hit[0], touched: t.path, reason: hit[1] });
+        }
+      });
+    }
+
+    // 0.6-z30 (F6): altri modi di citare un file, dalla prova degli strumenti: `percorso:riga`, link
+    // markdown, percorsi nei blocchi di codice, cartella che contiene il file, nome del file da solo
+    // (unico nel repo), cartella di un index.*. Il motivo dice quale, perché valga come pista.
+    fence = false;
+    section = '';
+    const docDir = doc.includes('/') ? doc.slice(0, doc.lastIndexOf('/')) : '';
+    docLines.forEach((l, k) => {
+      if (/^\s*(```|~~~)/.test(l)) { fence = !fence; return; }
+      const h = !fence && l.match(/^(#{1,6})\s+(.+?)\s*$/);
+      if (h) section = `${h[1]} ${h[2]}`;
+      if (/<!--\s*mr:ignore-claim\s*-->/.test(l)) return;
+      const cand = [];
+      if (fence) {
+        // solo righe a forma di comando (`python3 tools/x.py`): un path come prima parola è un albero di
+        // file o un elenco (0.6-u), e non conta
+        const toks = l.replace(/^[\s│├└─|*+-]+/, '').split(/[\s'"=,;()<>`|]+/).filter(Boolean);
+        toks.slice(1).forEach((tok) => { if (/^[\w.@~-]*\/[\w./-]*\.[A-Za-z0-9]{1,5}$/.test(tok) && !tok.includes('://') && !tok.startsWith('#')) cand.push([tok, 'path in un comando di un blocco di codice']); });
+      } else {
+        for (const m of l.matchAll(/`([^`\s]+)`/g)) {
+          const t = m[1];
+          const conRiga = t.match(/^(.+?\.[A-Za-z0-9]{1,5})(?::\d+(?:[-:]\d+)?|#L\d+(?:-L?\d+)?)$/);
+          if (conRiga) cand.push([conRiga[1], 'path:riga citato']);
+          else if (/\/$/.test(t) || (t.includes('/') && !/\.[A-Za-z0-9]{1,5}$/.test(t))) cand.push([t, 'cartella citata: contiene il file']);
+          else if (!t.includes('/') && /\.[A-Za-z0-9]{1,5}$/.test(t)) cand.push([t, 'nome del file citato']);
+          else if (/^[a-z0-9][\w-]*[a-z0-9]$/i.test(t) && t.includes('-')) cand.push([t, 'cartella di un index.* citata']);
+        }
+        for (const m of l.matchAll(/\]\(([^)\s#]+)(?:#[^)]*)?\)/g)) {
+          const t = m[1];
+          if (/^[a-z]+:/i.test(t)) continue;
+          const parti = [];
+          for (const sg of (t.startsWith('/') ? t.slice(1) : (docDir ? docDir + '/' : '') + t).split('/')) {
+            if (sg === '..') parti.pop(); else if (sg && sg !== '.') parti.push(sg);
+          }
+          cand.push([parti.join('/'), 'link markdown al file']);
+        }
+      }
+      for (const [tok, motivo] of cand) {
+        const f = touchedList.find((t) => {
+          if (motivo === 'cartella citata: contiene il file') {
+            const d = tok.replace(/^\.\//, '').replace(/\/+$/, '');
+            if (d.split('/').filter(Boolean).length < 2 || !(t.path.startsWith(d + '/') || t.path.includes('/' + d + '/'))) return false;
+            // solo una cartella piccola (al più 30 file): `supabase/functions/` in 90 doc è rumore
+            return fileSotto(t.path.slice(0, t.path.indexOf(d) + d.length)) <= 30;
+          }
+          if (motivo === 'cartella di un index.* citata') return /(^|\/)index\.[a-z]+$/.test(t.path) && t.path.split('/').slice(-2)[0] === tok;
+          if (motivo === 'nome del file citato') {
+            if (/^(index|main|mod|lib|utils?|readme|package|config|setup)\./i.test(tok) || t.path.split('/').pop() !== tok) return false;
+            // nome unico nel repo, oppure doc nella cartella del file o sopra (procedura.md accanto a raccogli.py)
+            return basenameCount(tok) === 1 || (sameRepo && docDir !== '' && t.path.startsWith(docDir + '/'));
+          }
+          if (motivo === 'link markdown al file') return sameRepo ? t.path === tok : pathMatches(tok, t.path, repoName, { claim: true, basenameCount });
+          return pathMatches(tok, t.path, repoName, { claim: true, basenameCount });
+        });
+        if (!f || seen.has(`${k + 1}|${f.path}`)) continue;
+        seen.add(`${k + 1}|${f.path}`);
+        push({ line: k + 1, section, via: 'riferimento', ref: tok, touched: f.path, reason: f.deleted ? `${motivo} (file cancellato)` : motivo });
       }
     });
   }

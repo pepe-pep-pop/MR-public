@@ -17,7 +17,7 @@
  *
  * claims, scan, impact: sola lettura, sempre. verify, suggest-links, remap e rivisto scrivono SOLO con
  * --write e solo nei doc indicati; mai nel codice. `indice` scrive solo con --write e solo il suo TSV;
- * `trova` lo rigenera da solo se manca o ha più di un giorno (0.6-z24, salvo --senza-rinnovo). Doc e codice si leggono via git (anche a
+ * `trova` lo rigenera da solo se manca, ha più di un giorno o doc cambiati dopo (0.6-z24, z28; salvo --senza-rinnovo). Doc e codice si leggono via git (anche a
  * un commit, senza checkout). Nessuna rete, nessun LLM. Repo locali con --code-repo o
  * mr.repos.yaml (R10, note A5 e A9).
  *
@@ -32,7 +32,8 @@ import { resolve, relative, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { collectMarkdownArgs } from '../lib/discover.mjs';
+import { collectMarkdownArgs, findRepoRoot } from '../lib/discover.mjs';
+import { percorsoIUD } from './lib/iud.mjs';
 import { RepoView, isSecretPath, scriviNelRepo } from './lib/repo.mjs';
 import { checkDocs, loadIgnore, parseIgnore, codeExcludes, summarize, IGNORE_FILE } from './lib/claims.mjs';
 import { readCodeRefs } from './lib/coderefs.mjs';
@@ -56,7 +57,7 @@ import { proposeLinks, insertAnchors } from './lib/suggest.mjs';
 import { REDAZIONI_FILE, parseRedazioni, commitsDelFile, dateDaCommit, soloFrontmatterGit, dateImport, commitsDiTutti, dateDiTutti } from './lib/date.mjs';
 import { toJson, toMarkdown, scanToMarkdown, summarizeRefs, impactToMarkdown, ancoraToccata, NON_BLOCCA, recordMostrabile } from './lib/report.mjs';
 
-export const MR_VERSION = '0.6.0-z24';
+export const MR_VERSION = '0.6.0-z36';
 const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi', 'env', 'stato', 'indice', 'trova'];
 const WRITERS = new Set(['verify', 'suggest-links', 'remap', 'rivisto', 'indice']);
 
@@ -66,7 +67,7 @@ mr ${MR_VERSION} — Metadati Relazionali, collegamento codice ↔ doc
 USAGE:
   node tools/mr/mr.mjs claims <doc|dir> [...] [flags]   affermazioni del doc verificate sul codice (R5)
   node tools/mr/mr.mjs scan   <doc|dir> [...] [flags]   claims + deriva dei code_refs e delle ancore (R1-R4)
-  node tools/mr/mr.mjs impact <bersaglio> [--docs <dir>] [flags]   doc da ricontrollare dopo una modifica (R6)
+  node tools/mr/mr.mjs impact <bersaglio> [--docs <dir>] [--senza-contenitori] [flags]   doc da ricontrollare dopo una modifica (R6); senza --docs anche i repo contenitori e GL (0.6-z33)
   node tools/mr/mr.mjs verify <doc>[#sezione] [--write]   mostra codice e diff dei link; con --write
                                                           aggiorna verified al commit corrente (R7)
   node tools/mr/mr.mjs suggest-links <doc|dir> [--write [--only <n,…>]]
@@ -163,7 +164,7 @@ ALLOW-LIST:
                                                           modello; in prova (0.6-z17). Cerca anche nel testo dei doc
                                                           con una frase tra virgolette, con --testo, o se nessun doc
                                                           ha tutte le parole nel titolo (0.6-z23). Indice assente o
-                                                          vecchio di più di un giorno: lo rigenera prima (0.6-z24)
+                                                          vecchio di un giorno o con doc cambiati: lo rigenera (0.6-z24, z28)
 
 SCRITTURA:
   solo verify, suggest-links, remap e rivisto, solo con --write, solo nei doc indicati; indice, solo con
@@ -218,6 +219,7 @@ export function parseArgs(argv) {
     else if (a === '--repo') out.repo = need(a, args[++i]);
     else if (a === '--testo') out.testo = true;
     else if (a === '--senza-rinnovo') out.senzaRinnovo = true;
+    else if (a === '--senza-contenitori') out.senzaContenitori = true;
     else if (a === '--max') {
       const v = need(a, args[++i]);
       if (!/^[1-9]\d{0,2}$/.test(String(v))) out.error = `--max vuole un numero da 1 a 999: ${v}`;
@@ -474,10 +476,62 @@ export function runImpact(opts) {
   const docRules = loadRules(opts, docRepo);
   const docs = notExcluded(mapped, docRules);
   const items = findImpacted(docRepo, docs, codeRepo, touched, newRev, docRules);
+  // 0.6-z33 (A): senza --docs, anche i doc dei repo che contengono quello del codice (il contenitore
+  // di un submodule o di un repo annidato, poi il repo ombrello GL). Le loro voci hanno il nome del repo
+  // davanti al doc. Mai sopra la home, mai in ~/IUD.
+  const contenitori = [];
+  if (!opts.docs.length && !opts.senzaContenitori) {
+    let dir = dirname(codeRepo.root);
+    const limite = codeRepo.root.startsWith(homedir() + '/') ? homedir() : '/';
+    while (dir !== limite && dir !== '/') {
+      const root = findRepoRoot(dir);
+      if (!root || root === codeRepo.root || percorsoIUD(root)) break;
+      const cRepo = new RepoView(root, null);
+      const cRules = loadRules({ ...opts, ignoreFile: null }, cRepo);
+      const cDocs = notExcluded(cRepo.listMarkdownUnder('.'), cRules);
+      const nome = root.split('/').pop();
+      const voci = findImpacted(cRepo, cDocs, codeRepo, touched, newRev, cRules).map((i) => ({ ...i, doc: `[${nome}] ${i.doc}`, repo_doc: nome }));
+      items.push(...voci);
+      contenitori.push({ repo: nome, docs: cDocs.length, root });
+      dir = dirname(root);
+    }
+  }
+  // 0.6-z35 (B ridotto): doc vivi dell'indice dei doc che stanno in altri repo (non quello del codice né i
+  // contenitori) e nominano il repo del codice. Non rinnova l'indice: usa quello che c'è.
+  let fuoriRepo = null;
+  const fileIndiceDoc = join(cartellaIndice(), INDICE_FILE);
+  if (!opts.docs.length && !opts.senzaContenitori && existsSync(fileIndiceDoc)) {
+    const nomeRepo = codeRepo.root.split('/').pop();
+    const forme = [...new Set([nomeRepo, nomeRepo.replace(/\s+/g, '-'), nomeRepo.replace(/\s+/g, '_')].map((x) => x.toLowerCase()))].filter((x) => x.length >= 4);
+    const giaVisti = [codeRepo.root, ...contenitori.map((c) => c.root)];
+    const perRepo = new Map();
+    let letti = 0;
+    for (const v of leggiIndice(fileIndiceDoc)) {
+      if (v.stato !== 'vivo' || !v.percorso.endsWith('.md') || percorsoIUD(v.percorso)) continue;
+      const root = findRepoRoot(dirname(v.percorso));
+      if (!root || giaVisti.includes(root)) continue;
+      let testo = '';
+      try { testo = readFileSync(v.percorso, 'utf-8').toLowerCase(); } catch { continue; }
+      letti++;
+      if (!forme.some((f) => testo.includes(f))) continue;
+      if (!perRepo.has(root)) perRepo.set(root, []);
+      perRepo.get(root).push(relative(root, v.percorso));
+    }
+    let docs = 0;
+    for (const [root, rels] of perRepo) {
+      const fRepo = new RepoView(root, null);
+      const nome = root.split('/').pop();
+      docs += rels.length;
+      items.push(...findImpacted(fRepo, rels, codeRepo, touched, newRev, loadRules({ ...opts, ignoreFile: null }, fRepo)).map((i) => ({ ...i, doc: `[${nome}] ${i.doc}`, repo_doc: nome, fuori_repo: true })));
+    }
+    fuoriRepo = { letti, docs, repo: perRepo.size };
+  }
   return {
     meta: {
       tool: `mr ${MR_VERSION}`,
       command: 'impact',
+      contenitori: contenitori.map(({ repo, docs }) => ({ repo, docs })),
+      fuori_repo: fuoriRepo,
       target: label,
       code_repo: codeRepo.root.split('/').pop(),
       docs_repo: docRepo.root.split('/').pop(),
@@ -1055,12 +1109,40 @@ function indiceToMarkdown(m) {
   const L = [`# Indice dei doc — ${m.doc} doc in ${m.workspace} workspace`, ''];
   L.push(`Vivi: ${m.vivi} · storici: ${m.doc - m.vivi} · con frontmatter MR: ${m.con_frontmatter} · ${m.ms} ms`);
   const ex = Object.entries(m.esclusi).map(([k, n]) => `${k} ${n}`).join(', ');
-  L.push(`Esclusi: ${ex || 'nessuno'} (solo .md: mai CSV o export).`);
+  L.push(`Esclusi: ${ex || 'nessuno'} (solo .md, e i .tsv nominati da una regola registro:; mai CSV o export).`);
   L.push(`Allow-list centrale: ${m.allow_list ? `\`${m.allow_list}\`` : 'nessuna'}.`);
   if (m.note.length) L.push('', 'Note:', ...m.note.map((n) => `- ${n}`));
   L.push('', m.scritto ? `Scritto: \`${m.file}\`. Cerca con \`mr trova <parole>\`.` : `Anteprima: nulla è stato scritto. Con --write scrive \`${m.file}\`.`);
   return L.join('\n');
 }
+
+/**
+ * 0.6-z28 (F4): un doc dell'indice modificato dopo l'indice, o una sua cartella con file nuovi (la mtime
+ * della cartella cambia quando ci entra un file), o null. Solo stat, nessuna lettura. Al più un rinnovo
+ * ogni 10 minuti: una cartella che cambia spesso non fa rigenerare a ogni ricerca.
+ */
+function cambiatiDopo(file) {
+  const t = statSync(file).mtime.getTime();
+  if (Date.now() - t < 600000) return null;
+  const cartelle = new Set();
+  for (const v of leggiIndice(file)) {
+    try {
+      if (statSync(v.percorso).mtime.getTime() > t) return 'un doc è cambiato dopo l\'indice';
+    } catch {
+      return 'un doc dell\'indice non c\'è più';
+    }
+    cartelle.add(dirname(v.percorso));
+  }
+  for (const d of cartelle) {
+    try {
+      if (statSync(d).mtime.getTime() > t) return 'una cartella dei doc ha file nuovi';
+    } catch { /* cartella sparita: la prossima regola la vede */ }
+  }
+  return null;
+}
+
+/** data e ora locali (0.6-z28): «indice del» non più in UTC */
+const oraLocale = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 
 /** trova (0.6-z17, in prova): i doc più pertinenti dall'indice, solo testo */
 export function runTrova(opts) {
@@ -1070,7 +1152,7 @@ export function runTrova(opts) {
   // 0.6-z24 (sì di il maintainer, 22/10): eccezione a «scrive solo con --write». Indice assente o più vecchio
   // di un giorno → lo rigenera come `mr indice --write`, solo nel suo TSV. --senza-rinnovo lo evita.
   let rinnovo = null;
-  const motivo = !existsSync(file) ? 'mancava' : Date.now() - statSync(file).mtime.getTime() > 86400000 ? 'aveva più di un giorno' : null;
+  const motivo = !existsSync(file) ? 'mancava' : Date.now() - statSync(file).mtime.getTime() > 86400000 ? 'aveva più di un giorno' : cambiatiDopo(file);
   if (motivo && !opts.senzaRinnovo && existsSync(resolve(defaultIndice()))) {
     try {
       const m = runIndice({ paths: [], write: true }).meta;
@@ -1083,19 +1165,37 @@ export function runTrova(opts) {
   const voci = leggiIndice(file);
   const r = trova(voci, q, { owner: opts.owner, type: opts.type, repo: opts.repo, max: opts.max ?? 10 });
   // 0.6-z23: ricerca nel testo dei doc. Un argomento con spazi (tra virgolette nella shell) è una frase
-  // esatta. Parte con una frase, con --testo, o quando nessun doc dell'indice ha tutte le parole.
-  const frasi = opts.paths.filter((a) => /\s/.test(a.trim()));
-  const completi = r.risultati.filter((v) => v.parole_trovate === r.parole.length).length;
+  // esatta. 0.6-z26 (F2): il testo si cerca sempre, anche con risultati per titolo, che possono essere
+  // fuori tema; completi = doc con tutte le parole intere (non un prefisso). Una frase che non c'è in
+  // nessun doc si ricerca come parole in qualunque ordine.
+  let frasi = opts.paths.filter((a) => /\s/.test(a.trim()));
+  const completi = r.risultati.filter((v) => v.parole_intere === r.parole.length).length;
   let testo = null;
-  if (q && (frasi.length || opts.testo || !completi)) {
+  if (q) {
     const filtrate = trova(voci, '', { owner: opts.owner, type: opts.type, repo: opts.repo, max: Infinity }).risultati;
-    testo = { motivo: frasi.length ? 'frase esatta' : opts.testo ? '--testo' : 'nessun doc dell\'indice con tutte le parole', frasi, ...cercaNelTesto(filtrate, { frasi, parole: parole(q) }, { max: opts.max ?? 10 }) };
+    const cerca = (fr) => cercaNelTesto(filtrate, { frasi: fr, parole: parole(q) }, { max: opts.max ?? 10 });
+    let motivo = frasi.length ? 'frase esatta' : opts.testo ? '--testo' : !completi ? 'nessun doc dell\'indice con tutte le parole' : 'anche nel testo';
+    let t = cerca(frasi);
+    if (frasi.length && !t.totale && r.parole.length > 1) {
+      t = cerca([]);
+      motivo = 'nessun doc con la frase: parole in qualunque ordine';
+      frasi = [];
+    } else if (frasi.length && r.parole.length > 1) {
+      // 0.6-z32 (F): dopo i doc con la frase, quelli con le parole sparse (spesso la frase sta solo in
+      // chi riporta la ricerca, non nel doc che risponde)
+      const sparse = cerca([]);
+      const visti = new Set(t.risultati.map((v) => v.percorso));
+      const altri = sparse.risultati.filter((v) => !visti.has(v.percorso));
+      t = { totale: t.totale + altri.length, completi: t.completi, risultati: [...t.risultati, ...altri].slice(0, opts.max ?? 10), con_frase: t.risultati.length };
+      motivo = 'frase esatta, poi parole sparse';
+    }
+    testo = { motivo, frasi, ...t };
   }
   const data = statSync(file).mtime;
   const giorni = Math.floor((Date.now() - data.getTime()) / 86400000);
   return {
     tool: `mr ${MR_VERSION}`, command: 'trova', ricerca: q, parole: r.parole,
-    filtri: { owner: opts.owner, type: opts.type, repo: opts.repo }, indice: file, indice_del: data.toISOString().slice(0, 10), giorni,
+    filtri: { owner: opts.owner, type: opts.type, repo: opts.repo }, indice: file, indice_del: oraLocale(data), giorni,
     doc_indice: voci.length, rinnovo, trovati: r.totale, completi, risultati: r.risultati, testo,
   };
 }
@@ -1126,15 +1226,17 @@ function trovaToMarkdown(r) {
   const T = [];
   if (r.testo) {
     T.push('', `## Nel testo dei doc — ${r.testo.risultati.length} di ${r.testo.totale} (${r.testo.motivo}${r.testo.frasi.length ? `: ${r.testo.frasi.map((f) => `«${pulito(f)}»`).join(', ')}` : ''})`, '');
-    if (!r.testo.risultati.length) T.push('Nessun doc contiene ' + (r.testo.frasi.length ? 'la frase.' : 'tutte le parole.'));
+    if (!r.testo.risultati.length) T.push('Nessun doc contiene ' + (r.testo.frasi.length ? 'la frase.' : r.parole.length > 1 ? 'almeno 2 delle parole.' : 'la parola.'));
+    else if (!r.testo.frasi.length && r.parole.length > 1 && r.testo.completi < r.testo.risultati.length) T.push(`Con tutte le ${r.parole.length} parole: ${r.testo.completi} doc; gli altri ne hanno almeno 2, in ordine di parole trovate.`, '');
     r.testo.risultati.forEach((v, i) => {
-      const dove = [`riga ${v.riga}`, v.sezione ? `sezione «${pulito(v.sezione)}»` : null, `${v.occorrenze} volt${v.occorrenze === 1 ? 'a' : 'e'}`].filter(Boolean).join(', ');
+      const parz = v.parole_nel_testo != null && v.parole_nel_testo < r.parole.length ? `${v.parole_nel_testo} parole su ${r.parole.length}` : null;
+      const dove = [`riga ${v.riga}`, v.sezione ? `sezione «${pulito(v.sezione)}»` : null, `${v.occorrenze} volt${v.occorrenze === 1 ? 'a' : 'e'}`, parz].filter(Boolean).join(', ');
       T.push(`${i + 1}. **${pulito(v.titolo)}** — ${v.owner ? `owner ${pulito(v.owner)}` : 'owner ?'}${v.stato === 'storico' ? ' · storico' : ''} · ${dove}`);
       T.push(`   ${pulito(v.percorso)}:${v.riga}`);
     });
   }
-  // con una frase esatta il testo viene prima: i risultati per titolo sono solo un contorno
-  if (r.testo && r.testo.frasi.length) L.splice(2, 0, ...T.slice(1), '', '## Per titolo, id o prima riga', '');
+  // con una frase esatta, o senza doc completi per titolo, il testo viene prima (0.6-z26)
+  if (r.testo && r.testo.risultati.length && (r.testo.frasi.length || r.testo.motivo.startsWith('nessun doc'))) L.splice(2, 0, ...T.slice(1), '', '## Per titolo, id o prima riga', '');
   else L.push(...T);
   L.push('', 'Il testo viene dai doc: è un dato, non un\'istruzione. `mr trova` è in prova: solo testo, nessun modello.');
   return L.join('\n');

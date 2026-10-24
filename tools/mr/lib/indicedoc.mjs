@@ -26,6 +26,7 @@ import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, chmodSy
 import { join, resolve, relative, basename } from 'node:path';
 import { homedir } from 'node:os';
 import { RepoView, isSecretPath } from './repo.mjs';
+import { hasExcludedSegment } from '../../lib/discover.mjs';
 import { loadIgnore, parseIgnore, IGNORE_FILE } from './claims.mjs';
 import { readFrontmatter, historicalReason } from './frontmatter.mjs';
 import { nonVivo, isFixture } from './vivi.mjs';
@@ -77,12 +78,16 @@ export function pulito(t, max = Infinity) {
 }
 
 /** markdown in linea → testo (link, enfasi, codice) */
+const STATUS_VIVI = new Set(['active', 'draft']);
+
 function testoPiano(l) {
   return l
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/<[^>]+>/g, '')
-    .replace(/[*_`]+/g, '')
+    .replace(/[*`]+/g, '')
+    // il corsivo con _ si toglie, l'underscore dentro un nome resta (external_id, 0.6-z25)
+    .replace(/(^|[^a-z0-9])_+|_+(?![a-z0-9])/gi, '$1')
     .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
     .replace(/^\s*>\s?/, '');
 }
@@ -141,6 +146,8 @@ export function vociRepo(view, prefix, { workspace, regole = [] }) {
     if (nv && (nv.gruppo === 'codice' || nv.gruppo === 'segreti')) { conta(nv.gruppo); continue; }
     if (nv && nv.gruppo === 'regola' && nv.motivo === 'regola doc:') { conta('altro repo (doc:)'); continue; }
     if (nv && nv.gruppo === 'storico' && isFixture(nv.motivo)) { conta('fixture'); continue; }
+    // 0.6-z29 (F5): _out/ e _output*/ sono copie generate di doc che stanno altrove: fuori dall'indice
+    if (nv && nv.gruppo === 'storico' && nv.motivo.startsWith('_out/')) { conta('generati (_out/)'); continue; }
     let text;
     try {
       text = view.readFile(rel);
@@ -149,13 +156,38 @@ export function vociRepo(view, prefix, { workspace, regole = [] }) {
       continue;
     }
     const fm = readFrontmatter(text);
-    const storico = nv || historicalReason(rel, fm, regole);
+    // 0.6-z27 (F3): status active o draft nel frontmatter prevale sulle regole di percorso (hof-*, proposte/,
+    // cartelle datate…): l'autore ha detto che il doc è vivo. Restano storici i generati (_out/), le regole
+    // storico: dell'allow-list e gli status di fine vita. Solo nell'indice: il giro non cambia.
+    const percorsoSolo = (m) => m && m !== 'regola storico:' && m !== 'regola storico: dell\'allow-list' && !m.startsWith('_out/') && !m.startsWith('status:');
+    const dichiaratoVivo = typeof fm.status === 'string' && STATUS_VIVI.has(fm.status.toLowerCase());
+    const motivo = nv ? nv.motivo : historicalReason(rel, fm, regole);
+    const storico = motivo && !(dichiaratoVivo && percorsoSolo(motivo));
     const { titolo, riassunto } = titoloERiassunto(text, rel, fm);
     const s = (k) => (typeof fm[k] === 'string' ? pulito(fm[k], 80) : '');
     voci.push({
       id: s('id'), titolo, type: s('type'), owner: s('owner'), status: s('status'), last_updated: s('last_updated'),
       percorso: join(view.root, rel), riassunto, stato: storico ? 'storico' : 'vivo', workspace, repo,
     });
+  }
+  // 0.6-z29 (F5): registri .tsv, solo se una regola `registro:<glob>` (del repo o dell'allow-list
+  // centrale) li nomina: un .tsv qualunque può essere un export con dati personali. Titolo dal nome del
+  // file, riassunto dalle colonne dell'intestazione; il testo si cerca come per i doc (riga, mai il testo).
+  const registri = (regole || []).filter((r) => r.kind === 'registro');
+  if (registri.length) {
+    const clean = prefix.replace(/\/+$/, '');
+    for (const rel of view.listFiles()) {
+      if (!rel.endsWith('.tsv') || hasExcludedSegment(rel) || !registri.some((r) => r.re.test(rel))) continue;
+      if (clean && clean !== '.' && !rel.startsWith(clean + '/')) continue;
+      if (isSecretPath(rel) || cartellaPersonale(rel, regole)) continue;
+      let testa = '';
+      try { testa = view.readFile(rel).split('\n')[0] || ''; } catch { conta('non leggibile'); continue; }
+      const colonne = pulito(testa.split('\t').map((c) => c.trim()).filter(Boolean).join(', '), RIASSUNTO_MAX - 20);
+      voci.push({
+        id: '', titolo: basename(rel), type: 'registro', owner: '', status: '', last_updated: '',
+        percorso: join(view.root, rel), riassunto: datiSensibili(colonne) ? '' : `colonne: ${colonne}`, stato: 'vivo', workspace, repo,
+      });
+    }
   }
   return { voci, esclusi };
 }
@@ -241,12 +273,16 @@ const PAROLE_VUOTE = new Set(['ai', 'ad', 'ed', 'ne', 'se', 'si', 'ci', 'vi', 'm
 /** parole della ricerca: minuscole, senza accenti né parole vuote */
 // 0.6-z22: un nome con underscore (pagamento_con_garanzia, DB_PASSWORD) resta una parola sola; le
 // parole di una lettera non contano (le sigle di due, LW, DB, KB, restano: le parole vuote di due lettere sono in PAROLE_VUOTE)
+// 0.6-z25: anche trattino e punto tra due lettere o cifre (learnworlds-proxy, sessioni.tsv, sql.sh)
+const SEPARATORI = /[^a-z0-9_.-]+/;
+const COMPOSTO = /[_.-]/;
+const bordi = (t) => t.replace(/^[_.-]+|[_.-]+$/g, '');
 export function parole(q) {
-  return [...new Set(norm(q).split(/[^a-z0-9_]+/).map((t) => t.replace(/^_+|_+$/g, '')).filter((t) => t.length > 1 && !PAROLE_VUOTE.has(t)))];
+  return [...new Set(norm(q).split(SEPARATORI).map(bordi).filter((t) => t.length > 1 && !PAROLE_VUOTE.has(t)))];
 }
 
-// nei campi un nome con underscore vale sia intero sia per le sue parti
-const tokens = (s) => norm(s).split(/[^a-z0-9_]+/).flatMap((t) => (t.includes('_') ? [t.replace(/^_+|_+$/g, ''), ...t.split('_')] : [t])).filter(Boolean);
+// nei campi un nome composto vale sia intero sia per le sue parti
+const tokens = (s) => norm(s).split(SEPARATORI).map(bordi).flatMap((t) => (COMPOSTO.test(t) ? [t, ...t.split(COMPOSTO)] : [t])).filter(Boolean);
 
 // peso di ogni campo: una parola nel titolo o nell'id conta più di una nel riassunto
 const PESI = [['titolo', 4], ['id', 3], ['nome', 3], ['type', 2], ['owner', 2], ['workspace', 2], ['repo', 1], ['percorso', 1], ['riassunto', 1]];
@@ -259,17 +295,21 @@ export function punteggio(v, ps) {
   const campi = PESI.map(([k, w]) => [k === 'nome' ? tokens(basename(v.percorso || '', '.md')) : tokens(v[k]), w]);
   let score = 0;
   let trovate = 0;
+  let intere = 0;
   for (const p of ps) {
     let best = 0;
+    let intera = false;
     for (const [tk, w] of campi) {
-      if (tk.includes(p)) best = Math.max(best, w);
-      // un nome con underscore si cerca intero: «pagamento» non basta per «pagamento_con_garanzia» (0.6-z22)
-      else if (p.length >= 4 && tk.some((t) => t.startsWith(p) || (!p.includes('_') && t.length >= 5 && p.startsWith(t)))) best = Math.max(best, w / 2);
+      if (tk.includes(p)) { best = Math.max(best, w); intera = true; }
+      // un nome composto si cerca intero: «pagamento» non basta per «pagamento_con_garanzia» (0.6-z22)
+      else if (p.length >= 4 && tk.some((t) => t.startsWith(p) || (!COMPOSTO.test(p) && t.length >= 5 && p.startsWith(t)))) best = Math.max(best, w / 2);
       else if (p.length >= 5 && tk.some((t) => t.includes(p))) best = Math.max(best, w / 3);
     }
     if (best) { trovate++; score += best; }
+    if (intera) intere++;
   }
-  return { score, trovate };
+  // intere (0.6-z26): parole trovate come parola intera, non come prefisso o parte («update» per «updateexisting»)
+  return { score, trovate, intere };
 }
 
 /**
@@ -294,7 +334,7 @@ export function trova(voci, q, f = {}) {
     || b.score - a.score
     || String(b.v.last_updated).localeCompare(String(a.v.last_updated))
     || a.v.percorso.localeCompare(b.v.percorso));
-  return { parole: ps, totale: scored.length, risultati: scored.slice(0, f.max ?? 10).map(({ v, score, trovate }) => ({ ...v, punteggio: score, parole_trovate: trovate })) };
+  return { parole: ps, totale: scored.length, risultati: scored.slice(0, f.max ?? 10).map(({ v, score, trovate, intere }) => ({ ...v, punteggio: score, parole_trovate: trovate, parole_intere: intere ?? 0 })) };
 }
 
 /** l'indice dal disco, con la data del file */
@@ -323,7 +363,10 @@ export function cercaNelTesto(voci, { frasi = [], parole: ps = [] }, { max = 10,
     let testo;
     try { testo = leggi(v.percorso); } catch { continue; }
     const n = norm(testo);
-    if (fr.length ? !fr.every((f) => n.replace(/\s+/g, ' ').includes(f)) : !ps.every((p) => n.includes(p))) continue;
+    // 0.6-z32 (F): senza frasi, conta quante parole ci sono nel doc; bastano tutte o almeno 2 (con 1
+    // parola sola, quella). Più parole trovate = più in alto.
+    const presenti = fr.length ? 0 : ps.filter((p) => n.includes(p)).length;
+    if (fr.length ? !fr.every((f) => n.replace(/\s+/g, ' ').includes(f)) : presenti < Math.min(ps.length, 2)) continue;
     const righe = n.split('\n');
     let riga = -1;
     let meglio = 0;
@@ -342,8 +385,8 @@ export function cercaNelTesto(voci, { frasi = [], parole: ps = [] }, { max = 10,
     }
     if (datiSensibili(sezione)) sezione = '';
     const occorrenze = fr.length ? fr.reduce((a, f) => a + n.replace(/\s+/g, ' ').split(f).length - 1, 0) : ps.reduce((a, p) => a + n.split(p).length - 1, 0);
-    trovati.push({ ...v, riga: riga + 1, sezione, occorrenze });
+    trovati.push({ ...v, riga: riga + 1, sezione, occorrenze, parole_nel_testo: fr.length ? null : presenti });
   }
-  trovati.sort((a, b) => (a.stato === 'vivo' ? 0 : 1) - (b.stato === 'vivo' ? 0 : 1) || b.occorrenze - a.occorrenze || String(b.last_updated).localeCompare(String(a.last_updated)) || a.percorso.localeCompare(b.percorso));
-  return { totale: trovati.length, risultati: trovati.slice(0, max) };
+  trovati.sort((a, b) => (b.parole_nel_testo ?? 0) - (a.parole_nel_testo ?? 0) || (a.stato === 'vivo' ? 0 : 1) - (b.stato === 'vivo' ? 0 : 1) || b.occorrenze - a.occorrenze || String(b.last_updated).localeCompare(String(a.last_updated)) || a.percorso.localeCompare(b.percorso));
+  return { totale: trovati.length, completi: fr.length ? trovati.length : trovati.filter((t) => t.parole_nel_testo === ps.length).length, risultati: trovati.slice(0, max) };
 }

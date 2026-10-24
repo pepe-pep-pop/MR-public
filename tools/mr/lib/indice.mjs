@@ -9,6 +9,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { percorsoIUD } from './iud.mjs';
 
 const MR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -46,7 +47,8 @@ export function parseIndice(text) {
     const m = l.match(/^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|/);
     if (!m) continue;
     const [, slug, gruppo, path] = m;
-    const motivo = archivio.has(slug) ? 'archivio' : gruppo === 'archivio' ? 'gruppo archivio' : null;
+    // IUD (0.6-z31): mai letto da giro, indice, stato
+    const motivo = percorsoIUD(path) ? 'IUD: mai letto dagli strumenti MR' : archivio.has(slug) ? 'archivio' : gruppo === 'archivio' ? 'gruppo archivio' : null;
     out.push({ slug, gruppo, path, attivo: !motivo, motivo });
   }
   return out;

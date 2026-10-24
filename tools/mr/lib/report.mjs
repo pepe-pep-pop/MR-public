@@ -178,12 +178,20 @@ export const viaLink = (i) => i.via === 'ancora' || i.via === 'code_refs';
 /** ancora toccata davvero: simbolo toccato o non più trovato, file ancorato toccato o cancellato (non «simbolo no») */
 export const ancoraToccata = (i) => viaLink(i) && !/simbolo no/.test(i.reason);
 
+/** 0.6-z30 (F6): voce che viene solo da un riferimento debole (path:riga, link, cartella, nome del file) */
+export const viaRiferimento = (i) => i.via === 'riferimento';
+
 export function impactToMarkdown(meta, items) {
   const L = [`# Impatto — ${meta.target} (${meta.code_repo})`, '', NON_BLOCCA, ''];
-  L.push(`File toccati: ${meta.touched_files.length} · doc esaminati: ${meta.docs} (${meta.docs_repo}) · da ricontrollare: ${new Set(items.filter((i) => !i.historical).map((i) => i.doc)).size}`);
+  // i doc citati solo da riferimenti deboli sono piste, a parte: non entrano in «da ricontrollare»
+  const vivi = items.filter((i) => !i.historical);
+  const forteDoc = new Set(vivi.filter((i) => !viaRiferimento(i)).map((i) => i.doc));
+  const piste = vivi.filter((i) => !forteDoc.has(i.doc));
+  const pisteDoc = [...new Set(piste.map((i) => i.doc))];
+  L.push(`File toccati: ${meta.touched_files.length} · doc esaminati: ${meta.docs} (${meta.docs_repo})${meta.contenitori?.length ? ` + ${meta.contenitori.map((c) => `${c.docs} (${c.repo})`).join(' + ')} nei repo contenitori` : ''}${meta.fuori_repo?.docs ? ` + ${meta.fuori_repo.docs} in ${meta.fuori_repo.repo} altri repo che lo nominano` : ''} · da ricontrollare: ${forteDoc.size}${pisteDoc.length ? ` · piste in più: ${pisteDoc.length}` : ''}`);
   if (meta.touched_version_only) L.push(`Non contati: ${meta.touched_version_only} file con il solo numero di versione del pacchetto cambiato (package.json / package-lock.json).`);
   L.push('');
-  const live = items.filter((i) => !i.historical);
+  const live = vivi.filter((i) => forteDoc.has(i.doc));
   if (!live.length) L.push('Nessun doc da ricontrollare.', '');
   // 0.6-t: le ancore in testa, con il conteggio; prima quelle toccate, poi «file toccato, simbolo no»
   const links = live.filter(viaLink);
@@ -207,6 +215,15 @@ export function impactToMarkdown(meta, items) {
     for (const i of is.sort((a, b) => a.line - b.line)) {
       L.push(`| ${i.line} | ${cell(i.text || '')} | ${cell(i.section)} | ${i.via} | \`${cell(i.ref)}\` | \`${cell(i.touched)}\` | ${i.reason} |`);
     }
+    L.push('');
+  }
+  if (pisteDoc.length) {
+    L.push('## Piste in più (riferimenti deboli)', '', 'Doc che citano il file solo con `percorso:riga`, un link markdown, un comando in un blocco di codice, la cartella che lo contiene, il nome del file o la cartella di un `index.*`. Da guardare se la modifica cambia quello che descrivono.', '');
+    for (const d of pisteDoc.slice(0, 15)) {
+      const is = piste.filter((i) => i.doc === d);
+      L.push(`- \`${cell(d)}\` — riga ${is.map((i) => i.line).slice(0, 3).join(', ')}${is.length > 3 ? '…' : ''} (${[...new Set(is.map((i) => i.reason))].join('; ')})`);
+    }
+    if (pisteDoc.length > 15) L.push(`- e altri ${pisteDoc.length - 15} doc (\`--format json\` per l'elenco)`);
     L.push('');
   }
   const hist = [...new Set(items.filter((i) => i.historical).map((i) => i.doc))];

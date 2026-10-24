@@ -64,6 +64,8 @@ function assert(cond, msg) {
 }
 
 console.log('\ntest-scan.mjs\n');
+// 0.6-z35: impact legge l'indice dei doc: nei test un indice inesistente, mai quello della macchina
+process.env.MR_INDICE_DIR = join(tmpdir(), 'mr-test-indice-inesistente-' + process.pid);
 
 // ── unit ──
 test('findSymbol: livelli regex (TS, Python, SQL) e occorrenze', () => {
