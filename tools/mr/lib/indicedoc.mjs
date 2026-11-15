@@ -29,7 +29,7 @@ import { RepoView, isSecretPath } from './repo.mjs';
 import { hasExcludedSegment } from '../../lib/discover.mjs';
 import { loadIgnore, parseIgnore, IGNORE_FILE } from './claims.mjs';
 import { readFrontmatter, historicalReason } from './frontmatter.mjs';
-import { nonVivo, isFixture } from './vivi.mjs';
+import { nonVivo, isFixture, vivoDichiarato } from './vivi.mjs';
 import { redactLine } from './drift.mjs';
 
 export const INDICE_FILE = 'INDICE_DOC.tsv';
@@ -158,11 +158,13 @@ export function vociRepo(view, prefix, { workspace, regole = [] }) {
     const fm = readFrontmatter(text);
     // 0.6-z27 (F3): status active o draft nel frontmatter prevale sulle regole di percorso (hof-*, proposte/,
     // cartelle datate…): l'autore ha detto che il doc è vivo. Restano storici i generati (_out/), le regole
-    // storico: dell'allow-list e gli status di fine vita. Solo nell'indice: il giro non cambia.
+    // storico: dell'allow-list e gli status di fine vita. Dalla 0.6-z37 vale anche in `mr vivi` e nel giro.
     const percorsoSolo = (m) => m && m !== 'regola storico:' && m !== 'regola storico: dell\'allow-list' && !m.startsWith('_out/') && !m.startsWith('status:');
     const dichiaratoVivo = typeof fm.status === 'string' && STATUS_VIVI.has(fm.status.toLowerCase());
     const motivo = nv ? nv.motivo : historicalReason(rel, fm, regole);
-    const storico = motivo && !(dichiaratoVivo && percorsoSolo(motivo));
+    // 0.6-z37 (C): un doc datato con «Stato: da inviare|aperta|in corso» in testa è vivo (stessa regola del giro)
+    const vivoTesto = nv && nv.gruppo === 'storico' ? vivoDichiarato(nv.motivo, text) : null;
+    const storico = motivo && !((dichiaratoVivo && percorsoSolo(motivo)) || vivoTesto);
     const { titolo, riassunto } = titoloERiassunto(text, rel, fm);
     const s = (k) => (typeof fm[k] === 'string' ? pulito(fm[k], 80) : '');
     voci.push({
@@ -347,6 +349,17 @@ export function leggiIndice(file) {
 // ricerca nel testo (0.6-z23): quando titolo, id e prima riga non bastano
 
 /**
+ * malus di classifica nel testo (0.6-z37, difetto A): i report (type: report), i doc storici e i registri
+ * .tsv sotto prova-strumenti/ riportano le ricerche degli altri e salivano in testa a «Nel testo».
+ * Restano nei risultati, dopo i doc che rispondono. 1 = in fondo a parità di parole trovate.
+ */
+export function rumore(v) {
+  if (norm(v.type) === 'report' || v.stato === 'storico') return 1;
+  if (/\.tsv$/i.test(v.percorso || '') && /(^|\/)prova-strumenti\//.test(v.percorso || '')) return 1;
+  return 0;
+}
+
+/**
  * cerca nel corpo dei doc dell'indice: le frasi esatte (minuscole, senza accenti) e, se non ci sono
  * frasi, tutte le parole nello stesso doc. Ritorna per ogni doc la prima riga che corrisponde (la
  * riga con più parole) e la sezione che la contiene: mai il testo della riga, che può contenere
@@ -387,6 +400,6 @@ export function cercaNelTesto(voci, { frasi = [], parole: ps = [] }, { max = 10,
     const occorrenze = fr.length ? fr.reduce((a, f) => a + n.replace(/\s+/g, ' ').split(f).length - 1, 0) : ps.reduce((a, p) => a + n.split(p).length - 1, 0);
     trovati.push({ ...v, riga: riga + 1, sezione, occorrenze, parole_nel_testo: fr.length ? null : presenti });
   }
-  trovati.sort((a, b) => (b.parole_nel_testo ?? 0) - (a.parole_nel_testo ?? 0) || (a.stato === 'vivo' ? 0 : 1) - (b.stato === 'vivo' ? 0 : 1) || b.occorrenze - a.occorrenze || String(b.last_updated).localeCompare(String(a.last_updated)) || a.percorso.localeCompare(b.percorso));
+  trovati.sort((a, b) => (b.parole_nel_testo ?? 0) - (a.parole_nel_testo ?? 0) || rumore(a) - rumore(b) || (a.stato === 'vivo' ? 0 : 1) - (b.stato === 'vivo' ? 0 : 1) || b.occorrenze - a.occorrenze || String(b.last_updated).localeCompare(String(a.last_updated)) || a.percorso.localeCompare(b.percorso));
   return { totale: trovati.length, completi: fr.length ? trovati.length : trovati.filter((t) => t.parole_nel_testo === ps.length).length, risultati: trovati.slice(0, max) };
 }

@@ -345,6 +345,103 @@ test('doc del contenitore che descrive un sotto-repo (0.6-i): si cerca nel sotto
   rmSync(b3, { recursive: true, force: true });
 });
 
+// 0.6-z37: falsi positivi del giro 7 (nomi finti)
+const commit = (root, msg) => {
+  execFileSync('git', ['-C', root, 'add', '-A']);
+  execFileSync('git', ['-C', root, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '-m', msg]);
+};
+const b4 = realpathSync(mkdtempSync(join(tmpdir(), 'mr-giro-z37-')));
+{
+  // contenitore (come il monorepo per arch): il codice del doc è il contenitore stesso
+  const cont = join(b4, 'Contenitore');
+  write(cont, 'tool/script.ts', 'const a = process.env.NOME_ENV_ALTROVE;\nconst b = nome_spostato;\nconst c = nome_nei_test;\nconst d = process.env.NOME_VERO_TOLTO;\n');
+  write(cont, '.gitignore', 'prodotti/\n');
+  gitInit(cont);
+  write(cont, 'tool/script.ts', 'const a = 1;\n');
+  write(cont, 'area/registro.md', '# Registro\n\nLa landing legge `NOME_ENV_ALTROVE`; il conteggio sta in `nome_spostato`; `nome_nei_test` serve; `NOME_VERO_TOLTO` serve.\n');
+  commit(cont, 'sposta');
+  // un altro workspace dell'indice: ha NOME_ENV_ALTROVE e nome_spostato nel codice, nome_nei_test solo nei test
+  const prod = join(b4, 'prodotti', 'prodotto-uno');
+  write(prod, 'src/env.ts', 'export const x = process.env.NOME_ENV_ALTROVE;\nexport const nome_spostato = 1;\n');
+  write(prod, 'tests/x.test.ts', 'const nome_nei_test = 1;\nconst nome_altrove_due = 1;\n');
+  write(prod, 'src/due.ts', 'export const nome_citato = 1;\n');
+  gitInit(prod);
+  // un prodotto: un doc che nomina prodotto-uno, uno che non lo nomina; un doc superato; doc datati e hof
+  const svc = join(b4, 'prodotti', 'servizio');
+  write(svc, 'src/a.ts', 'export const nome_citato = 1;\nexport const nome_superato = 1;\nexport const nome_sezione = 1;\nexport const nome_vivo = 1;\n');
+  write(svc, 'tests/b.test.ts', 'const solo_nei_test = 1;\n');
+  for (let i = 0; i < 7; i++) write(svc, `src/r${i}.ts`, `export const rem_x_10 = ${i};\n`);
+  write(svc, 'src/rem.ts', 'export const rem_x = 1;\n');
+  gitInit(svc);
+  write(svc, 'src/a.ts', 'export const altro = 1;\n');
+  rmSync(join(svc, 'src/rem.ts'));
+  rmSync(join(svc, 'tests/b.test.ts'));
+  commit(svc, 'togli');
+  // dopo la rimozione di rem_x, 7 commit su rem_x_10 (con -S sarebbero le 6 candidate più recenti)
+  for (let i = 0; i < 7; i++) { write(svc, `src/r${i}.ts`, `export const rem_x_10 = ${i};\nexport const rem_x_10_b = ${i};\n`); commit(svc, `r${i}`); }
+  write(svc, 'docs/cita.md', '# Cita\n\nIl valore arriva da prodotto-uno: `nome_citato`.\n');
+  write(svc, 'docs/non-cita.md', '# Non cita\n\nIl valore sta in `nome_citato`.\n');
+  write(svc, 'docs/superato.md', '# Vecchio\n\n> **Superato dal 03/11/2026.** Quanto segue è storia.\n\n## Dettagli\n\nUsa `nome_superato`.\n');
+  write(svc, 'docs/sezioni.md', '# Sezioni\n\n## Vecchia\n\n> Sostituito da `altro.md`.\n\nUsa `nome_sezione`.\n\n### Sotto\n\nAnche `nome_sezione`.\n\n## Nuova\n\nUsa `nome_vivo`.\n');
+  write(svc, 'docs/test-e-parole.md', '# T\n\nUsa `solo_nei_test` e `rem_x`.\n');
+  write(svc, 'docs/esito-20261012/riepilogo.md', '# Esito\n\nUsa `nome_vivo`.\n');
+  write(svc, 'docs/esito-20261013/aperta.md', '# Richiesta\n\n**Stato:** da inviare\n\nUsa `nome_vivo`.\n');
+  write(svc, 'docs/hof-servizio-1.md', `---\nmr_version: '0.6'\nid: x/hof\ntitle: "H"\ntype: handoff\nowner: x\nstatus: active\ncreated: '2026-01-01'\nlast_updated: '2026-01-01'\n---\n\n# H\n\nUsa \`nome_vivo\`.\n`);
+  write(svc, 'docs/hof-servizio-0.md', '# H vecchio\n\nUsa `nome_vivo`.\n');
+  // 0.6-z38: due hof active dello stesso agente (conta solo l'ultimo) e un log automatico
+  const hofFm = (id, extra = '') => `---\nmr_version: '0.6'\nid: x/${id}\ntitle: "H"\ntype: handoff\nowner: x\nstatus: active\ncreated: '2026-01-01'\nlast_updated: '2026-01-01'\n${extra}---\n\n# H\n\nUsa \`nome_vivo\`.\n`;
+  write(svc, 'docs/hof-altro-1.md', hofFm('h1'));
+  write(svc, 'docs/hof-altro-2.md', hofFm('h2'));
+  write(svc, 'docs/log-notturno.md', hofFm('h3', 'generato_da: cron\n').replace('type: handoff', 'type: log'));
+  commit(svc, 'doc');
+  const ind = join(b4, 'indice.md');
+  writeFileSync(ind, ['| Slug | Gruppo | Path | Nota |', '|---|---|---|---|',
+    `| \`area\` | coordinamento | \`${join(cont, 'area')}\` | — |`,
+    `| \`uno\` | software | \`${prod}\` | — |`,
+    `| \`servizio\` | software | \`${svc}\` | — |`, ''].join('\n'));
+  const r = run('--indice', ind, '--senza-pr');
+  const z = r.stdout || '';
+  const seg = z.slice(z.indexOf('## Segnalazioni'), z.indexOf('## Appendice'));
+  const app = z.slice(z.indexOf('## Appendice'));
+
+  test('altri repo dell\'indice (0.6-z37, fix 1-2): doc del contenitore, un nome che vive in un altro repo è external', () => {
+    assert(r.status === 0, r.stderr);
+    assert(!/`NOME_ENV_ALTROVE` non trovato/.test(seg) && !/`nome_spostato` non trovato/.test(seg), seg);
+    assert(/NOME_ENV_ALTROVE` \(external: prodotto-uno\)/.test(app) && /nome_spostato` \(external: prodotto-uno\)/.test(app), app);
+    assert(/`NOME_VERO_TOLTO` non trovato.*causato da/.test(seg), `un nome tolto e assente altrove resta segnalato\n${seg}`);
+    assert(/`nome_nei_test` non trovato.*causato da/.test(seg), `un nome che altrove sta solo nei test non è external\n${seg}`);
+  });
+
+  test('altri repo (0.6-z37): un doc di prodotto guarda solo i repo che nomina', () => {
+    assert(!seg.includes('servizio/docs/cita.md') && /servizio\/docs\/cita\.md: .*nome_citato` \(external: prodotto-uno\)/.test(app), app);
+    assert(/### servizio\/servizio\/docs\/non-cita\.md[\s\S]*`nome_citato` non trovato.*causato da/.test(seg), seg);
+  });
+
+  test('doc o sezione superati (0.6-z37, fix 4): «> Superato dal …» in testa vale per il doc, sotto un titolo per la sezione', () => {
+    assert(!z.includes('nome_superato` non trovato'), 'doc superato in testa: nessuna segnalazione');
+    const s = seg.slice(seg.indexOf('docs/sezioni.md'));
+    assert(seg.includes('docs/sezioni.md') && !/nome_sezione/.test(s.split('\n---\n')[0]) && /`nome_vivo` non trovato/.test(s), s.slice(0, 900));
+  });
+
+  test('cause (0.6-z37): un nome che c\'era solo nei test non è prova; -G a parola intera: rem_x non è rem_x_10', () => {
+    assert(!/`solo_nei_test` non trovato.*causato da/.test(seg) && /solo_nei_test/.test(app), 'solo nei test: appendice');
+    assert(/`rem_x` non trovato.*causato da/.test(seg), `rem_x: la causa c'è anche dopo 7 commit su rem_x_10\n${seg}`);
+  });
+
+  test('storici per path (0.6-z37, fix 4, C, D): cartella con data compatta storica; status active o «Stato: da inviare» la battono', () => {
+    assert(!z.includes('esito-20261012/riepilogo.md'), 'esito-AAAAMMGG/: storico');
+    assert(seg.includes('servizio/docs/esito-20261013/aperta.md'), '«Stato: da inviare» in testa: vivo');
+    assert(seg.includes('servizio/docs/hof-servizio-1.md') && !z.includes('hof-servizio-0.md'), 'hof con status active nel giro, senza no');
+  });
+
+  test('hof superati e log automatici (0.6-z38): dell\'hof di un agente conta l\'ultimo; generato_da fuori dal giro', () => {
+    assert(seg.includes('Segnalazione — docs/hof-altro-2.md') && !seg.includes('Segnalazione — docs/hof-altro-1.md'), 'ultimo hof dell\'agente nel giro, il precedente no');
+    assert(!z.includes('log-notturno.md') && !z.includes('x/h3'), 'generato_da: fuori dal giro');
+    assert(/di cui 1 hof active superati/.test(z) && /1 log automatici \(`generato_da`\)/.test(z), z.slice(z.indexOf('Regole (0.6-g')).slice(0, 400));
+  });
+}
+rmSync(b4, { recursive: true, force: true });
+
 rmSync(base, { recursive: true, force: true });
 const ok = results.filter(Boolean).length;
 console.log(`\nRisultato: ${ok}/${results.length} ${ok === results.length ? 'PASS' : 'FAIL'}`);

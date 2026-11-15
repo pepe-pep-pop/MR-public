@@ -291,6 +291,58 @@ export function verboLegato(par, claim, kind) {
     }
   }
 
+  // 0.6-z37 (fix 3 del giro 7): elenco di soli nomi tra parentesi che precisa l'oggetto di un verbo di
+  // rimozione, anche se la frase va a capo: «Tolti i\n residui Netlify/Vercel (`netlify.toml`, `vercel.json`)».
+  // Tra verbo e parentesi al più MAX_GAP parole e nessun «da/in/con…» (con «sostituito con il nuovo (`x`)»
+  // il nome è quello nuovo)
+  {
+    const elenco = (t) => t.t === 'code' || t.t === 'comma' || t.t === 'slash' || (t.t === 'word' && (CONNECTOR.test(t.v) || /^(ecc|etc)$/i.test(t.v)));
+    let open = -1;
+    for (let j = claimIdx - 1; j >= 0; j--) {
+      if (toks[j].t === 'open') { open = j; break; }
+      // elenco introdotto da «…:» dentro la parentesi: «(commit dell'08/06: `A`, `B`)», al più 6 parole
+      if (toks[j].colon) {
+        for (let k = j - 1, n = 0; k >= 0 && n <= 6; k--, n++) {
+          if (toks[k].t === 'open') { open = k; break; }
+          if (toks[k].t !== 'word' && toks[k].t !== 'slash' && toks[k].t !== 'comma') break;
+        }
+        break;
+      }
+      if (!elenco(toks[j])) break;
+    }
+    let chiusa = -1;
+    // dopo il nome, fino alla chiusa: altri nomi e al più 4 parole («e le copie `VITE_*`»)
+    for (let j = claimIdx + 1, extra = 0; open >= 0 && j < toks.length; j++) {
+      if (toks[j].t === 'close') { chiusa = j; break; }
+      if (elenco(toks[j])) continue;
+      if (toks[j].t !== 'word' || ++extra > 4) break;
+    }
+    // verbo subito dopo la parentesi, con i soli ausiliari in mezzo: «Il `.env` (…: `A`, `B`) è stato tolto»
+    if (open >= 0 && chiusa >= 0) {
+      for (let j = chiusa + 1; j < toks.length && toks[j].t === 'word'; j++) {
+        if (okVerb(toks[j].v)) {
+          if (SUPERSEDED.test(toks[j].v) && !(toks[j + 1] && toks[j + 1].t === 'word' && DA.test(toks[j + 1].v))) break;
+          return toks[j].v;
+        }
+        if (!AUX.test(toks[j].v)) break;
+      }
+    }
+    if (open >= 0 && chiusa >= 0) {
+      const parole = [];
+      for (let j = open - 1; j >= 0 && parole.length <= MAX_GAP; j--) {
+        const t = toks[j];
+        if (t.t === 'slash') continue;
+        if (t.t !== 'word') break;
+        if (okVerb(t.v) && parole.length) {
+          if (SUPERSEDED.test(t.v) && !DA.test(parole[parole.length - 1])) break;
+          if (parole.some((w) => AFTER_NEW.test(w))) break;
+          return t.v;
+        }
+        parole.push(t.v);
+      }
+    }
+  }
+
   // parentesi o inciso subito dopo il gruppo del nome: parla di quel nome
   if (mine) {
     // solo la parentesi subito dopo il nome stesso, non dopo un altro nome del gruppo

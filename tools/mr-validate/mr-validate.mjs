@@ -24,7 +24,7 @@
  * Profilo light (matrix.md §1.8):
  *   - obbligatori: id, title, type, owner, status, created, last_updated
  *   - ammessi in più: depends_on, propagate_staleness_to, superseded_by, staleness_threshold,
- *     code_refs (v0.6), review_needed (v0.6-z) (+ mr_version, campi _*)
+ *     code_refs (v0.6), review_needed (v0.6-z), generato_da (v0.6-z38) (+ mr_version, campi _*)
  *   - required_by scritto nel file → errore (si calcola come inverso di depends_on)
  *   - altri campi MR (ai_summary, related_to…) → warning "fuori profilo"
  *   - chiavi che MR non conosce, scritte da altri strumenti nello stesso blocco (pdf_options di
@@ -63,7 +63,7 @@ const STALENESS_DEFAULTS = {
 
 // Profilo light (matrix.md §1.8)
 const LIGHT_REQUIRED = ['id', 'title', 'type', 'owner', 'status', 'created', 'last_updated'];
-const LIGHT_OPTIONAL = ['depends_on', 'propagate_staleness_to', 'superseded_by', 'staleness_threshold', 'code_refs', 'review_needed'];
+const LIGHT_OPTIONAL = ['depends_on', 'propagate_staleness_to', 'superseded_by', 'staleness_threshold', 'code_refs', 'review_needed', 'generato_da'];
 const PROFILES = ['full', 'light'];
 let SCHEMA_KEYS = new Set(); // chiavi di primo livello dello schema MR (le altre sono di altri strumenti)
 

@@ -39,7 +39,7 @@ import { checkDocs, loadIgnore, parseIgnore, codeExcludes, summarize, IGNORE_FIL
 import { readCodeRefs } from './lib/coderefs.mjs';
 import { readFrontmatter, historicalReason, erroreFrontmatter } from './lib/frontmatter.mjs';
 import { messaggioParser, bloccoMr } from '../lib/illeggibile.mjs';
-import { nonVivo } from './lib/vivi.mjs';
+import { nonVivo, hofSuperati, dataUltimoCommit } from './lib/vivi.mjs';
 import { shaNonRisolti } from '../lib/redazioni.mjs';
 import { DriftContext, evaluateRef } from './lib/drift.mjs';
 import { parseDiff, targetDiff, findImpacted, versionOnly } from './lib/impact.mjs';
@@ -57,7 +57,7 @@ import { proposeLinks, insertAnchors } from './lib/suggest.mjs';
 import { REDAZIONI_FILE, parseRedazioni, commitsDelFile, dateDaCommit, soloFrontmatterGit, dateImport, commitsDiTutti, dateDiTutti } from './lib/date.mjs';
 import { toJson, toMarkdown, scanToMarkdown, summarizeRefs, impactToMarkdown, ancoraToccata, NON_BLOCCA, recordMostrabile } from './lib/report.mjs';
 
-export const MR_VERSION = '0.6.0-z36';
+export const MR_VERSION = '0.6.0-z38';
 const COMMANDS = ['claims', 'scan', 'impact', 'verify', 'suggest-links', 'remap', 'coverage', 'rivisto', 'date', 'vivi', 'env', 'stato', 'indice', 'trova'];
 const WRITERS = new Set(['verify', 'suggest-links', 'remap', 'rivisto', 'indice']);
 
@@ -670,8 +670,11 @@ export function runVivi(opts) {
   const rules = [...loadIgnore(view), ...central];
   const vivi = [];
   const nonVivi = [];
-  for (const rel of view.listMarkdownUnder(prefix)) {
-    const nv = nonVivo(rel, rules);
+  const tutti = view.listMarkdownUnder(prefix);
+  const superati = hofSuperati(tutti, (d) => dataUltimoCommit(view, d)); // 0.6-z38: solo l'ultimo hof di ogni agente è vivo
+  for (const rel of tutti) {
+    // 0.6-z37 (D): status active/draft (o «Stato: aperta» nei doc datati) prevale sul path, come nel giro
+    const nv = nonVivo(rel, rules, (d) => view.readFile(d), superati);
     if (nv) { nonVivi.push({ doc: rel, motivo: nv.motivo, gruppo: nv.gruppo }); continue; }
     const text = view.readFile(rel);
     const fm = readFrontmatter(text);
@@ -1169,12 +1172,17 @@ export function runTrova(opts) {
   // fuori tema; completi = doc con tutte le parole intere (non un prefisso). Una frase che non c'è in
   // nessun doc si ricerca come parole in qualunque ordine.
   let frasi = opts.paths.filter((a) => /\s/.test(a.trim()));
+  // 0.6-z37 (difetto B): un nome composto (trattino, punto, underscore: learnworlds-proxy, sql.sh) si cerca
+  // alla lettera come una frase esatta, così l'intestazione dice «frase esatta» e non «nessun doc con tutte
+  // le parole» (solo se per titolo nessun doc le ha tutte)
   const completi = r.risultati.filter((v) => v.parole_intere === r.parole.length).length;
+  const composti = !frasi.length && !completi && !opts.testo ? r.parole.filter((p) => /[a-z0-9][_.-][a-z0-9]/.test(p)) : [];
+  if (composti.length) frasi = composti;
   let testo = null;
   if (q) {
     const filtrate = trova(voci, '', { owner: opts.owner, type: opts.type, repo: opts.repo, max: Infinity }).risultati;
     const cerca = (fr) => cercaNelTesto(filtrate, { frasi: fr, parole: parole(q) }, { max: opts.max ?? 10 });
-    let motivo = frasi.length ? 'frase esatta' : opts.testo ? '--testo' : !completi ? 'nessun doc dell\'indice con tutte le parole' : 'anche nel testo';
+    let motivo = composti.length ? 'nome composto alla lettera' : frasi.length ? 'frase esatta' : opts.testo ? '--testo' : !completi ? 'nessun doc dell\'indice con tutte le parole' : 'anche nel testo';
     let t = cerca(frasi);
     if (frasi.length && !t.totale && r.parole.length > 1) {
       t = cerca([]);
@@ -1187,7 +1195,7 @@ export function runTrova(opts) {
       const visti = new Set(t.risultati.map((v) => v.percorso));
       const altri = sparse.risultati.filter((v) => !visti.has(v.percorso));
       t = { totale: t.totale + altri.length, completi: t.completi, risultati: [...t.risultati, ...altri].slice(0, opts.max ?? 10), con_frase: t.risultati.length };
-      motivo = 'frase esatta, poi parole sparse';
+      motivo = composti.length ? 'nome composto alla lettera, poi parole sparse' : 'frase esatta, poi parole sparse';
     }
     testo = { motivo, frasi, ...t };
   }
@@ -1202,7 +1210,10 @@ export function runTrova(opts) {
 
 function trovaToMarkdown(r) {
   const filtri = Object.entries(r.filtri).filter(([, v]) => v).map(([k, v]) => `--${k} ${pulito(v)}`).join(' ');
-  const L = [`# Trova «${pulito(r.ricerca)}»${filtri ? ` ${filtri}` : ''} — ${r.risultati.length} di ${r.trovati} (indice del ${r.indice_del}, ${r.doc_indice} doc)`, ''];
+  // 0.6-z37 (difetto B): niente per titolo ma qualcosa nel testo: l'intestazione conta il testo, non «0 di 0»
+  const soloTesto = !r.risultati.length && r.testo && r.testo.risultati.length;
+  const conti = soloTesto ? `${r.testo.risultati.length} di ${r.testo.totale} nel testo` : `${r.risultati.length} di ${r.trovati}`;
+  const L = [`# Trova «${pulito(r.ricerca)}»${filtri ? ` ${filtri}` : ''} — ${conti} (indice del ${r.indice_del}, ${r.doc_indice} doc)`, ''];
   if (r.rinnovo && !r.rinnovo.errore) L.push(`Indice rigenerato: ${r.rinnovo.motivo} (${r.rinnovo.doc} doc, ${r.rinnovo.ms} ms).`, '');
   if (r.rinnovo?.errore) L.push(`⚠️ Rinnovo automatico dell'indice fallito: ${pulito(r.rinnovo.errore)}. Cerco nell'indice del ${r.indice_del}.`, '');
   if (r.giorni > 7) L.push(`⚠️ Indice vecchio di ${r.giorni} giorni: \`mr indice --write\` lo rigenera.`, '');

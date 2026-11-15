@@ -216,7 +216,10 @@ test('trova nel testo (0.6-z23): frase esatta, nome con underscore, --testo; rig
   assert(!f.out.includes('Mario') && !f.out.includes('candidati'), 'testo della riga o cartella esclusa nell\'output');
   assert(f.out.indexOf('## Nel testo dei doc') < f.out.indexOf('## Per titolo'), 'con una frase il testo viene prima');
   const u = JSON.parse(run(MR, 'trova', 'codice_speciale_xyz', '--json').out);
-  assert(u.completi === 0 && u.testo && u.testo.motivo.startsWith('nessun doc') && u.testo.risultati[0].riga === 8, JSON.stringify(u.testo));
+  // 0.6-z37 (B): un nome composto senza doc completi per titolo si cerca alla lettera, come una frase
+  assert(u.completi === 0 && u.testo && u.testo.motivo === 'nome composto alla lettera' && u.testo.frasi[0] === 'codice_speciale_xyz' && u.testo.risultati[0].riga === 8, JSON.stringify(u.testo));
+  const um = run(MR, 'trova', 'codice_speciale_xyz').out;
+  assert(!/— 0 di 0/.test(um) && /^# Trova «codice_speciale_xyz» — \d+ di \d+ nel testo/m.test(um) && esitoTrova(um).risultati >= 1, `intestazione senza «0 di 0» (B)\n${um.slice(0, 300)}`);
   const t = JSON.parse(run(MR, 'trova', 'deploy', '--testo', '--json').out);
   assert(t.testo && t.testo.motivo === '--testo' && t.testo.totale >= 1, JSON.stringify(t.testo));
   const n = JSON.parse(run(MR, 'trova', 'deploy', 'vps', '--json').out);
@@ -233,6 +236,20 @@ test('trova (0.6-z26, F2): frase assente → parole in qualunque ordine; prefiss
   assert(r.risultati.length === 1 && r.risultati[0].parole_intere === 0, JSON.stringify(r.risultati));
   const o = run(MR, 'trova', 'introduzione', 'codice_speciale_xyz').out;
   assert(o.indexOf('## Nel testo dei doc') < o.indexOf('## Per titolo'), o);
+});
+
+test('trova nel testo (0.6-z37, A): report, storici e .tsv di prova-strumenti in fondo a parità di parole', () => {
+  const dir = join(base, 'rumore');
+  const doc = (n, t) => { write(dir, n, t); return join(dir, n); };
+  const vs = [
+    { titolo: 'Registro', type: 'registro', stato: 'vivo', percorso: doc('tool/prova-strumenti/segnalazioni.tsv', 'trova sync hook token\nsync hook token\n'), last_updated: '' },
+    { titolo: 'Report', type: 'report', stato: 'vivo', percorso: doc('report/r.md', '# R\n\nsync hook token sync hook token\n'), last_updated: '' },
+    { titolo: 'Vecchio', type: 'guide', stato: 'storico', percorso: doc('old/v.md', '# V\n\nsync hook token\n'), last_updated: '' },
+    { titolo: 'Registro dei token', type: 'guide', stato: 'vivo', percorso: doc('tool/registro-token.md', '# T\n\nIl sync usa un hook con il token.\n'), last_updated: '' },
+  ];
+  const r = cercaNelTesto(vs, { frasi: [], parole: ['sync', 'hook', 'token'] });
+  assert(r.totale === 4 && r.risultati[0].percorso.endsWith('registro-token.md'), r.risultati.map((v) => v.percorso.split('/').pop()).join(', '));
+  assert(r.risultati.slice(1).every((v) => !v.percorso.endsWith('registro-token.md')), 'gli altri restano, dopo');
 });
 
 test('indice (0.6-z27, F3): status active o draft prevale sulle regole di percorso; fine vita, _out e senza status restano storici', () => {

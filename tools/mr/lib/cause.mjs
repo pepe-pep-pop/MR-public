@@ -8,10 +8,13 @@
  *   path con /     ultimo commit che cancella o rinomina quel file (o un file che finisce
  *                  così); al padre il file c'era
  *   nome di file   ultimo commit che cancella o rinomina un file con quel nome
- *   altri nomi     tra i commit di `git log -S <nome>` (esclusi i .md), dal più recente: il
+ *   altri nomi     tra i commit di `git log -S <nome>` (esclusi i .md), dal più recente; per i nomi
+ *                  (0.6-z37) fino a 20 candidate, tenute solo se il diff tocca il nome come parola intera
+ *                  (`<nome>_altro` non conta, prima consumava le 6 candidate); il
  *                  primo in cui il nome come parola intera c'era al padre e non c'è più
  *                  (env, identifier, symbol: parola; table: ultima parte nei file di schema;
  *                  endpoint: prefisso fisso come stringa; command: script nei package.json)
+ * Dalla 0.6-z37 la presenza al padre non conta nei file di test e fixture (TEST_FILE).
  * Si guardano al massimo MAX_CANDIDATES commit per claim. Nessun contenuto esce: solo hash e data.
  *
  * Tempi (0.6-z4): nel giro questa prova è l'80% del tempo (239 s su 338). Due correzioni:
@@ -24,11 +27,12 @@ import { classifySpan } from './extract.mjs';
 import { endpointPrefixes, isSchemaFile } from './check.mjs';
 
 const MAX_CANDIDATES = 6;
+const MAX_CANDIDATES_S = 20; // candidate di -S per i nomi, prima del filtro a parola intera (0.6-z37)
 const NOT_DOCS = ['.', ':(exclude,glob)**/*.md', ':(exclude,glob)**/*.mdx'];
 
-function log(repo, args) {
+function log(repo, args, max = MAX_CANDIDATES) {
   try {
-    return repo.git(['log', `--max-count=${MAX_CANDIDATES}`, '--format=%h|%as', ...args]).split('\n').filter(Boolean).map((l) => {
+    return repo.git(['log', `--max-count=${max}`, '--format=%h|%as', ...args]).split('\n').filter(Boolean).map((l) => {
       const [hash, date] = l.split('|');
       return { hash, date };
     });
@@ -45,10 +49,19 @@ function present(repo, rev, test) {
   }
 }
 
+// 0.6-z37: file di test e fixture. Un nome che c'era solo lì (il titolo di un test, un dato finto) non è
+// prova di deriva: «nome_v2» nel nome di un test tolto non dice che il codice usava nome_v2 (giro 7, fix 6)
+export const TEST_FILE = /(^|\/)(tests?|__tests__|fixtures?|__fixtures__|__mocks__|spec)\/|\.(test|spec)\.[^/]+$|(^|\/)test_[^/]+\.py$|_test\.(go|py)$/i;
+
 // paths: limita la ricerca ai file indicati (al padre bastano i file toccati dal commit)
 function wordAt(view, word, schemaOnly = false, paths = null) {
-  const hits = view.grepMatches([word], { fixed: true, word: true, ...(paths ? { paths } : {}) });
+  const hits = view.grepMatches([word], { fixed: true, word: true, ...(paths ? { paths } : {}) }).filter((h) => !TEST_FILE.test(h.path));
   return schemaOnly ? hits.some((h) => isSchemaFile(h.path)) : hits.length > 0;
+}
+
+/** regex del nome come parola intera: `nome_v2` non è `nome_v2_10min` (0.6-z37) */
+export function parolaIntera(nome) {
+  return `(^|[^A-Za-z0-9_$])${nome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Za-z0-9_$]|$)`;
 }
 
 function literalAt(view, lit, paths = null) {
@@ -135,6 +148,21 @@ function verifiedCauseSenzaCache(repo, r) {
   } else {
     return null;
   }
-  const cands = log(repo, ['-S', key, head, '--', ...specs]);
+  // nomi (env, identifier, symbol, table): candidate di -S filtrate a parola intera (0.6-z37);
+  // endpoint e comandi: numero di occorrenze della stringa (-S), come prima
+  const parola = r.kind === 'env' || r.kind === 'identifier' || r.kind === 'symbol' || r.kind === 'table';
+  if (!parola) return firstRemoval(repo, log(repo, ['-S', key, head, '--', ...specs]), test);
+  // -G con il nome come parola costa 3 volte -S su un repo grande (giro 7: 13 minuti invece di 7): si tiene
+  // -S, che conta anche le sottostringhe, si prendono più candidate e si tengono solo i commit il cui diff
+  // tocca il nome come parola intera
+  const re = new RegExp(parolaIntera(key), 'm');
+  const cands = log(repo, ['-S', key, head, '--', ...specs], MAX_CANDIDATES_S).filter((c) => {
+    try {
+      const diff = repo.git(['show', '--format=', '--unified=0', '--no-color', c.hash, '--', ...specs]);
+      return diff.split('\n').some((l) => /^[+-](?![+-]{2} )/.test(l) && re.test(l.slice(1)));
+    } catch {
+      return false;
+    }
+  });
   return firstRemoval(repo, cands, test);
 }

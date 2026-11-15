@@ -234,7 +234,7 @@ scritture incrociate. Non è un nuovo formato: stesso schema 0.5, vincoli in pi�
 | Campo | Profilo light |
 |---|---|
 | `mr_version`, `id`, `title`, `type`, `owner`, `status`, `created`, `last_updated` | **obbligatori** |
-| `depends_on`, `propagate_staleness_to`, `superseded_by`, `staleness_threshold`, `code_refs`, `review_needed` | opzionali (`superseded_by` obbligatorio con `status: superseded`; `staleness_threshold` è una configurazione del solo doc; `code_refs` dalla v0.6; `review_needed` dalla 0.6-z: doc valido con parti non più vere, motivo breve, lo toglie `mr rivisto --write`) |
+| `depends_on`, `propagate_staleness_to`, `superseded_by`, `staleness_threshold`, `code_refs`, `review_needed`, `generato_da` | opzionali (`superseded_by` obbligatorio con `status: superseded`; `staleness_threshold` è una configurazione del solo doc; `code_refs` dalla v0.6; `review_needed` dalla 0.6-z: doc valido con parti non più vere, motivo breve, lo toglie `mr rivisto --write`; `generato_da` dalla 0.6-z38: il doc è un log automatico, valore libero non vuoto come `cron`, `monitor`, `script`; resta nell'indice, esce dal giro e da `mr vivi`) |
 | campi `_*` | ammessi (sono dello scanner) |
 | `required_by` | **vietato nel file** (errore): si calcola come inverso dei `depends_on` e si legge in `mr-status.json` |
 | gli altri campi MR (`ai_summary`, `ai_keywords`, `related_to`, `priority`, …) | **warning** "fuori profilo" |
@@ -386,7 +386,7 @@ Quando un documento A con `propagate_staleness_to: [{id: B, ...}]` viene modific
 | `mr/formato-v06-delta` | `spec` | `formato_MR_v0.6_delta.md` | `active` | `2026-10-03` | `2026-10-13` |
 | `mr/matrix` | `spec` | `matrix.md` | `active` | `2026-04-26` | `2026-10-03` |
 | `mr/tools-mr-kg-readme` | `reference` | `tools/mr-kg/README.md` | `active` | `2026-06-25` | `2026-10-03` |
-| `mr/tools-mr-readme` | `reference` | `tools/mr/README.md` | `active` | `2026-10-03` | `2026-10-22` |
+| `mr/tools-mr-readme` | `reference` | `tools/mr/README.md` | `active` | `2026-10-03` | `2026-11-14` |
 
 <!-- MR-REGISTRY-END -->
 

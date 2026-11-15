@@ -38,6 +38,14 @@ const C = [
   [['abbiamo sostituito `old.ts` con `new.ts`'], 0, 'new.ts', 'path', false],
   [['| `x.ts` | rimosso | 3 |'], 0, 'x.ts', 'path', true],
   [['| `y.ts` | attivo | `z.ts` rimosso |'], 0, 'y.ts', 'path', false],
+  // 0.6-z37 (fix 3 del giro 7): elenco tra parentesi dopo l'oggetto del verbo, anche con la frase a capo
+  [['Si aggiorna il JSON. Tolti i', '  residui Uno/Due (`uno/`, `uno.toml`, `due.json`) e la mappa.'], 1, 'uno.toml', 'path', true],
+  [['- Tolti i residui Uno/Due (`uno.toml`, `due.json`)'], 0, 'due.json', 'path', true],
+  [['- Nessun file. Il `.env` del progetto (commit dell\'08/06:', '  `ENV_UNO`, `ENV_DUE` e le copie `VITE_*`) è stato tolto', '  dall\'indice.'], 1, 'ENV_DUE', 'env', true],
+  [['Sostituito con il nuovo modulo (`nuovo.ts`)'], 0, 'nuovo.ts', 'path', false],
+  [['Usa il file di configurazione (`config.ts`)'], 0, 'config.ts', 'path', false],
+  [['Test superati (`a.ts`)'], 0, 'a.ts', 'path', false],
+  [['Il modulo (`pay.ts`) è stato aggiunto'], 0, 'pay.ts', 'path', false],
   // forme trovate nella misura della 0.6-r: citazione con voci d'elenco, «+», elenco con descrizioni
   [['> - Nessuna API: rimossi `a.py`, `b.py`. Nuovo `k.py`, che rifiuta `SERVICE` e `FROM`', '> - Rimosso `kg_server.py` (endpoint di rete) e `mr_enhance.py` (scriveva nei file)'], 1, 'mr_enhance.py', 'path', true],
   [['> - Nessuna API: rimossi `a.py`, `b.py`. Nuovo `k.py`, che rifiuta `SERVICE` e `FROM`', '> - Rimosso `kg_server.py` (endpoint di rete) e `mr_enhance.py` (scriveva nei file)'], 0, 'k.py', 'path', false],

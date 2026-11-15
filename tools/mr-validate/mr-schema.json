@@ -74,6 +74,12 @@
       "maxLength": 200,
       "description": "v0.6-z: doc ancora valido ma con parti non più vere oggi; motivo breve. Lo toglie mr rivisto --write"
     },
+    "generato_da": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "description": "v0.6-z38: il doc è un log automatico (cron, monitor, script…): resta nell'indice e in trova, fuori dal giro e da mr vivi"
+    },
     "depends_on": {
       "type": "array",
       "items": { "$ref": "#/definitions/relation_entry" },

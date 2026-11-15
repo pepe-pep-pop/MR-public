@@ -187,6 +187,17 @@ test('review_needed (0.6-z): ammesso nel profilo light, warning «da aggiornare�
   assert(!/ok\.md:.*review_needed/.test(errori), 'ok.md non deve avere errori');
 });
 
+test('generato_da (0.6-z38): ammesso nel profilo light senza warning; vuoto → errore di schema', () => {
+  const d = tmpDocs({
+    'ok.md': 'id: t/ok\ntitle: Ok\ntype: log\nowner: t\nstatus: active\ngenerato_da: cron',
+    'vuoto.md': 'id: t/vuoto\ntitle: Vuoto\ntype: log\nowner: t\nstatus: active\ngenerato_da: ""',
+  });
+  const r = run('--profile', 'light', d);
+  rmSync(d, { recursive: true, force: true });
+  assert(!/ok\.md:.*generato_da/.test(r.out), `generato_da deve essere nel profilo light:\n${r.out.slice(0, 600)}`);
+  assert(/vuoto\.md:.*generato_da/.test(r.out.slice(r.out.indexOf('ERRORI'))), 'vuoto deve essere un errore');
+});
+
 test('chiavi di altri strumenti (0.6-z1): pdf_options di md-to-pdf → warning nel profilo light, errore nel full; i campi MR restano controllati', () => {
   // il caso del volantino di app-web: md-to-pdf legge pdf_options dallo stesso blocco del frontmatter
   const d = tmpDocs({

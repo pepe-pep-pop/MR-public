@@ -6,7 +6,7 @@ type: reference
 owner: rnd
 status: active
 created: '2026-10-03'
-last_updated: '2026-10-22'
+last_updated: '2026-11-14'
 depends_on:
   - id: mr/formato-v06-delta
     reason: "descrive i comandi del formato 0.6 (code_refs, ancore)"
@@ -243,7 +243,16 @@ lavora, non solo per chi mantiene i doc.
   `stato` (`vivo` o `storico`), `workspace`, `repo`. Storico = storico per path come nel giro, regola
   `storico:`, status di fine vita o cartella d'archivio. Dalla z27 uno status `active` o `draft` nel frontmatter
   prevale sulle regole di percorso (`hof-*`, `proposte/`, cartelle datate…): il doc è vivo. Restano storici i
-  generati (`_out/`) e le regole `storico:`. Vale solo per l'indice: il giro non cambia.
+  generati (`_out/`) e le regole `storico:`. Dalla z37 la stessa regola vale in `mr vivi` e nel giro (D), e un doc
+  datato con «Stato: da inviare», «aperta» o «in corso» tra le prime righe del corpo è vivo anche senza frontmatter (C).
+  Dalla z38 (hof): dell'hof di ogni agente conta solo l'ultimo (nella stessa cartella `hof-<nome>-<N>.md` o
+  `hof_<nome>_<N>.md`, N massimo, anche con lettera davanti o dietro come `6B` e `X18`; `hof-zeta-mc-1` è l'agente
+  `zeta-mc`, non `zeta`; a parità o senza numero, il commit più recente): gli altri, anche con status active, sono
+  storici «hof superato da hof-x-N.md» (restano nell'indice e in `trova`). Dalla z38 (log automatici): un doc con
+  `generato_da: <chi>` nel frontmatter (valore libero non vuoto: `cron`, `monitor`, `script`; chiave ammessa dal
+  profilo light) resta nell'indice e in `trova` ma non è vivo: fuori dal giro e da `mr vivi` (gruppo `generato`,
+  non conta nella salute). Per le cartelle intere di log: regola `storico:<glob>` nell'allow-list centrale (la
+  forma `log:<glob>` sarebbe identica, quindi non esiste); i doc `storico:` restano contati come storici nella salute.
   - **Fuori:** file di segreti, regole `codice:` e `doc:`, fixture, workspace in archivio, cartelle
     con dati personali (`candidati/`, `studenti/`, `lead/`, `contatti/`, `export/`…, più le regole
     `personali:<glob>` del `mr.claims.ignore` o dell'allow-list centrale). Si leggono solo `.md`: mai
@@ -286,6 +295,10 @@ lavora, non solo per chi mantiene i doc.
     sezione, mai il testo della riga, che può contenere dati personali. Un nome con underscore
     (`pagamento_con_garanzia`), trattino o punto (`learnworlds-proxy`, `sessioni.tsv`, dalla z25) è una parola
     sola, cercata intera; le sue parti si cercano anche da sole (`proxy`). Circa 0,4 secondi su 2400 doc.
+    Dalla z37 (B), se nessun doc lo ha per titolo, un nome composto si cerca alla lettera come una frase
+    («nome composto alla lettera») e l'intestazione conta i doc del testo («3 di 3 nel testo»), non «0 di 0».
+  - **Rumore in fondo** (0.6-z37, A): nel testo, a parità di parole trovate, i report (`type: report`), i doc
+    storici e i `.tsv` sotto `prova-strumenti/` vanno dopo gli altri: riportano le ricerche, non rispondono.
   - **Da qualunque cartella:** l'indice copre tutti i workspace attivi, quindi `trova` non dipende
     dalla cartella da cui si lancia.
 - **`uso.mjs`** (dalla z20 anche skill `chi-sa-cosa`, ricerche vuote, «doc aperto dopo» entro 30 minuti, e `--dettaglio` per giorno e progetto): conta nei transcript di Claude Code (`~/.claude/projects`) i comandi Bash che lanciano
@@ -320,6 +333,26 @@ Tutti e tre leggono soltanto, tranne `rivisto --write`.
 segnalazioni con prova di deriva, le «Ancore in deriva» e la «Salute dei doc»: copertura del
 frontmatter, «in PR aperte», vecchi, da aggiornare, sospesi. Opzioni e regole sono nell'intestazione
 del file e nella skill `mr-giro`.
+
+**Falsi positivi in meno** (0.6-z37, dal giro 7; i conteggi cambiano rispetto alla z36):
+- **Nomi in altri repo** (fix 1 e 2): prima di dichiarare «causato da», il nome si cerca a origin/<default> degli
+  altri repo dell'indice, solo nei file di codice (fuori doc, `.tsv`/`.csv`/`.txt`, test, fixture, report, archivi,
+  `_out/`). Per i doc di un repo contenitore (GL: arch, hubspot…) si guardano tutti gli altri repo, e valgono anche
+  un nome di file da solo e i comandi; per gli altri doc solo i repo che il doc nomina. Se c'è: appendice,
+  `(external: <repo>)`. Un repo che non è nell'indice (es. un workspace non ancora censito) non conta.
+- **Frase a capo e parentesi** (fix 3): «Tolti i\n residui (`a.toml`, `b.json`)» e «Il `.env` (…: `A`, `B`) è
+  stato tolto» legano il verbo ai nomi della parentesi.
+- **Doc o sezioni superati** (fix 4): `> **Superato dal …**`, `> Sostituito da …`, «Quanto segue è storia»,
+  «Questa sezione è storica» rendono storico il doc (se stanno in testa, sotto il solo titolo #) o la sezione,
+  fino al prossimo titolo dello stesso livello (`lib/superato.mjs`, vale anche per `claims` e `scan`). Le
+  cartelle con data compatta (`esito-20261012/`) sono storiche come quelle con `2026-10-12`.
+- **Storici per path** (C, D): status `active` o `draft` prevale sul path (hof, piani, proposte, cartelle datate),
+  come nell'indice dei doc; per i soli doc datati vale anche «Stato: da inviare|aperta|in corso» in testa. Questi
+  doc entrano nel giro: più doc vivi nella «Salute dei doc» e possibili segnalazioni nuove.
+- **Causa** (bonus): per i nomi, fino a 20 candidate di `git log -S`, tenute solo se il diff tocca il nome come
+  parola intera (prima `nome_v2` contava i commit su `nome_v2_10min` e consumava le 6 candidate; `-G` a parola
+  intera costava 3 volte tanto su un repo grande); un nome che al commit padre c'era solo in file di test o
+  fixture non è prova di deriva.
 
 ## Più repo: `--code-repo` e `mr.repos.yaml` (R10)
 
@@ -356,6 +389,8 @@ Senza un repo locale corrispondente: `unresolvable`. La lettura via `gh api` e l
 Piani chiusi (`docs/superpowers/plans/`), `status` superseded / deprecated / done / archived,
 cartelle d'archivio (`_archive`, `archivio`, `old`, `legacy`, `ref`, …) e regole `storico:<glob>`:
 gli esiti si calcolano, ma non danno segnali né exit code 1; nel report c'è una riga per doc.
+Dalla 0.6-z37 anche un doc o una sezione che si dichiara superato nel testo (`> **Superato dal …**`,
+«Quanto segue è storia»): vedi «Giro su più repo».
 
 ## Sicurezza (N4)
 

@@ -21,7 +21,10 @@
  *   `monorepo/apps/lezioni/go_live.md`) si controllano sui sotto-repo del workspace, mai sul
  *   repo del doc; i doc di un sotto-repo si controllano su tutti i repo del workspace tranne il
  *   contenitore esterno.
- * - Doc storici tolti dal giro (0.6-g, `isGiroHistorical`): non producono nulla.
+ * - Doc storici tolti dal giro (0.6-g, `isGiroHistorical`): non producono nulla. Dalla 0.6-z37 un doc
+ *   storico per path con status active o draft (o, se datato, «Stato: aperta» in testa) resta nel giro.
+ * - Nomi in altri repo (0.6-z37): prima di dichiarare «causato da», il nome si cerca a origin/<default>
+ *   degli altri repo dell'indice (solo file di codice): se c'è, esito external, in appendice.
  * - Nel giro entrano solo affermazioni di tipo path/command/env/endpoint/table/identifier
  *   con **prova di deriva verificata** (cause.mjs: il nome c'era ed è sparito); le altre
  *   not_found vanno in un'appendice non conteggiata.
@@ -59,11 +62,12 @@ export { parseIndice, defaultIndice, workspaceRepos };
 import { saluteDocs } from './lib/salute.mjs';
 import { readFrontmatter } from './lib/frontmatter.mjs';
 import { leggiBlob } from './lib/date.mjs';
-import { isGiroHistorical, isFixture, esclusoDaRegola } from './lib/vivi.mjs';
+import { isGiroHistorical, isFixture, esclusoDaRegola, vivoDichiarato, hofSuperati, generatoDa, dataUltimoCommit } from './lib/vivi.mjs';
 import { toSegnalazioni } from './lib/segnalazione.mjs';
 import { RepoView, isSecretPath } from './lib/repo.mjs';
 import { checkDocs, loadIgnore, parseIgnore, IGNORE_FILE, codeExcludes } from './lib/claims.mjs';
 import { RepoMap } from './lib/repomap.mjs';
+import { AltriRepo } from './lib/altri.mjs';
 import { ghEsegui, nomeCanonico } from './lib/remote.mjs';
 import { costruisciIndice, scriviIndice } from './lib/indicedoc.mjs';
 import { nomiLetti, nomiEsempi, nomiNeiDoc, confrontoEnv, loadEnvConfig, envFileEsterni } from './lib/env.mjs';
@@ -319,6 +323,8 @@ function runGiro(o) {
   let reposRead = 0;
   const appendix = [];
   const historicalCount = new Map();
+  let hofSuperatiN = 0; // hof active ma non gli ultimi del loro agente (0.6-z38)
+  let generatiN = 0; // doc con generato_da: fuori dal giro (0.6-z38)
   let affermazioni = 0;
   const refs = []; // [{slug, repo, ...repoRef}]
   const inCorrezione = []; // [{id, prs}] segnalazioni su doc toccati da una PR aperta (0.6-q)
@@ -332,6 +338,13 @@ function runGiro(o) {
   const redirect = new Map(); // repo → { da, a }: origin sul nome vecchio di un repo spostato (0.6-z16)
   // elenchi env (0.6-z9): variabili lette dal codice contro gli elenchi, conteggio a parte
   const elenchiEnv = []; // [{slug, repo, ...confrontoEnv}]
+  // altri repo dell'indice (0.6-z37): tutti i repo dei workspace attivi, anche fuori da --only, letti
+  // alla loro versione GitHub; per i nomi citati da un doc e che vivono altrove
+  const revAltri = new Map();
+  const altri = new AltriRepo(all.filter((w) => w.attivo).flatMap((w) => workspaceRepos(w.path).map((x) => x.root)), (root) => {
+    if (!revAltri.has(root)) revAltri.set(root, repoRef(root, { locale: o.locale }).rev);
+    return revAltri.get(root);
+  });
   for (const w of chosen) {
     const repos = workspaceRepos(w.path);
     if (!repos.length) {
@@ -374,16 +387,41 @@ function runGiro(o) {
       const ancoraOnly = [];
       // doc dentro cartelle codice:<glob> (repo o allow-list centrale): sono della copia esclusa (0.6-m)
       const exDocs = codeExcludes([...(view.hasFile(IGNORE_FILE) ? loadIgnore(view) : []), ...central]);
+      const storiciPerPath = []; // [rel, motivo]
       for (const rel of view.listMarkdownUnder(prefix)) {
         if (isSecretPath(rel)) continue;
         if (exDocs.some((r) => r.test(rel))) continue;
         const hist = isGiroHistorical(rel);
         if (hist) {
-          historicalCount.set(w.slug, (historicalCount.get(w.slug) || 0) + 1);
-          if (!isFixture(hist)) ancoraOnly.push(rel);
+          storiciPerPath.push([rel, hist]);
           continue;
         }
         docs.push(rel);
+      }
+      // 0.6-z37 (D, C): status active/draft (o «Stato: aperta» in testa a un doc datato) prevale sul path,
+      // come nell'indice dei doc: il doc torna nel giro. Testi letti in blocco
+      const testiStorici = view.readFiles(storiciPerPath.filter(([, h]) => !isFixture(h)).map(([rel]) => rel));
+      // 0.6-z38: dell'hof di ogni agente si controlla solo l'ultimo; gli altri, anche con status active, sono superati
+      const superati = hofSuperati(view.listMarkdownUnder(prefix).filter((rel) => !isSecretPath(rel)), (rel) => dataUltimoCommit(view, rel));
+      for (const [rel, hist] of storiciPerPath) {
+        if (testiStorici.has(rel) && vivoDichiarato(hist, testiStorici.get(rel))) {
+          if (!superati.has(rel)) {
+            docs.push(rel);
+            continue;
+          }
+          hofSuperatiN++;
+        }
+        historicalCount.set(w.slug, (historicalCount.get(w.slug) || 0) + 1);
+        if (!isFixture(hist)) ancoraOnly.push(rel);
+      }
+      // 0.6-z38: log automatici (`generato_da:` nel frontmatter): restano nell'indice, fuori dal giro e dalla salute
+      {
+        const testiDocs = view.readFiles(docs);
+        const generati = new Set(docs.filter((d) => testiDocs.has(d) && generatoDa(testiDocs.get(d))));
+        if (generati.size) {
+          generatiN += generati.size;
+          for (let i = docs.length - 1; i >= 0; i--) if (generati.has(docs[i])) docs.splice(i, 1);
+        }
       }
       if (!docs.length && !ancoraOnly.length) continue;
       // repo del codice: mr.repos.yaml del repo del doc, altrimenti mappa per cartella
@@ -441,8 +479,15 @@ function runGiro(o) {
         };
         const meta = { tool: `mr ${MR_VERSION}`, repo: repoName, rev: view.rev };
         const byDoc = new Map(docs.map((d) => [d, codeFor(d)]));
+        // nomi che vivono in un altro repo dell'indice (0.6-z37): per i doc di un repo contenitore (GL) tutti
+        // gli altri repo, per gli altri doc quelli che il doc nomina
+        const altriPer = (claims) => altri.risolvi(claims.map((c) => ({
+          ...c,
+          contenitore: !!r.outer,
+          roots: altri.perDoc({ escludi: [r.root, ...(byDoc.get(c.doc) || []).map((x) => x.root)], contenitore: !!r.outer, testo: view.readFile(c.doc) }),
+        })));
         out = toSegnalazioni(meta, records, [], () => view, {
-          workspace: w.slug, onlyCaused: true, today, lineText, tableHeader, reposForDoc: (d) => byDoc.get(d),
+          workspace: w.slug, onlyCaused: true, today, lineText, tableHeader, reposForDoc: (d) => byDoc.get(d), altri: altriPer,
           rawLine: (doc, n) => {
             if (!lines.has(doc)) lines.set(doc, view.readFile(doc).split('\n'));
             return lines.get(doc)[n - 1] || '';
@@ -544,7 +589,7 @@ function runGiro(o) {
     L.push(`Salute dei doc (conteggio a parte, sezione «Salute dei doc»): ${t} doc vivi su ${v} con frontmatter MR (più ${salute.reduce((a, x) => a + (x.inPr || []).length, 0)} in PR aperte), in ${salute.filter((x) => x.taggati).length} repo su ${salute.length}; da aggiornare (review_needed): ${salute.reduce((a, x) => a + (x.daAggiornare || []).length, 0)}.`);
   }
   L.push(`Elenchi env (conteggio a parte, sezione «Elenchi env»): ${elenchiEnv.reduce((a, x) => a + x.non_elencati.length, 0)} variabili lette dal codice e non elencate, ${elenchiEnv.reduce((a, x) => a + x.non_letti.length, 0)} elencate e non lette, in ${elenchiEnv.filter((x) => x.non_elencati.length || x.non_letti.length).length} repo su ${elenchiEnv.length}.`);
-  L.push(`Regole (0.6-g, 0.6-i): versione GitHub (origin/<default>) di ogni repo; doc storici fuori dal giro (${[...historicalCount.values()].reduce((a, b) => a + b, 0)} doc tolti); repo del codice dalla mappa (mr.repos.yaml o per cartella); righe che raccontano la rimozione o il passato = storico, righe di esempio fuori; solo affermazioni path/command/env/endpoint/table/identifier con prova di deriva («causato da»: il nome c'era ed è sparito). Le altre ${appendix.length} sono in appendice, non conteggiate.`, '');
+  L.push(`Regole (0.6-g, 0.6-i): versione GitHub (origin/<default>) di ogni repo; doc storici fuori dal giro (${[...historicalCount.values()].reduce((a, b) => a + b, 0)} doc tolti, di cui ${hofSuperatiN} hof active superati da un hof più recente dello stesso agente: si controlla solo l'ultimo); ${generatiN} log automatici (\`generato_da\`) fuori dal giro e dalla salute; repo del codice dalla mappa (mr.repos.yaml o per cartella); righe che raccontano la rimozione o il passato = storico, righe di esempio fuori; solo affermazioni path/command/env/endpoint/table/identifier con prova di deriva («causato da»: il nome c'era ed è sparito). Le altre ${appendix.length} sono in appendice, non conteggiate.`, '');
   if (excluded.length) L.push(`Esclusi: ${excluded.map(([s, m]) => `\`${s}\` (${m})`).join(', ')}.`, '');
   if (o.senzaPr) L.push('PR aperte: non lette (`--senza-pr`).', '');
   else {
@@ -724,6 +769,8 @@ export function motivoBreve(a) {
   if (a.reason === 'tipo fuori dal giro') return ' (tipo)';
   if (a.verbo) return ` (verbo «${a.verbo}»)`;
   if (a.reason.startsWith('nessuna prova')) return '';
+  const est = a.reason.match(/^external: c'è in (.+?) \(/);
+  if (est) return ` (external: ${est[1]})`;
   return ` (${a.reason.split(':')[0]})`;
 }
 

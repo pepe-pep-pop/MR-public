@@ -21,6 +21,7 @@
 import { extractClaims } from './extract.mjs';
 import { readFrontmatter, historicalReason } from './frontmatter.mjs';
 import { checkClaim, prefetchClaims } from './check.mjs';
+import { righeStoriche } from './superato.mjs';
 
 export const IGNORE_FILE = 'mr.claims.ignore';
 
@@ -108,7 +109,8 @@ export function checkDocs(docRepo, docRels, opts = {}) {
     const repos = reposFor(d);
     // cartelle che non sono codice (codice:<glob>): fuori dalla ricerca in tutti i repo del doc
     for (const r of repos) r.excludeCode(excl);
-    return [d, extractClaims(text), historicalReason(d, readFrontmatter(text), rules), repos];
+    // 0.6-z37: «> Superato dal …», «Quanto segue è storia» rendono storici il doc o la sezione
+    return [d, extractClaims(text), historicalReason(d, readFrontmatter(text), rules), repos, righeStoriche(text)];
   });
 
   // prefetch per repo, con i soli claim dei doc mappati su quel repo
@@ -130,10 +132,11 @@ export function checkDocs(docRepo, docRels, opts = {}) {
   const externalFor = opts.externalReposFor ?? (() => []);
   const out = [];
   const pendingExternal = []; // [record, claim, docRel, repos esterni]
-  for (const [docRel, claims, historical, repos] of perDoc) {
+  for (const [docRel, claims, historicalDoc, repos, superati] of perDoc) {
     for (const claim of claims) {
       const base = { doc: docRel, line: claim.line, section: claim.section, kind: claim.kind, claim: claim.text, key: claim.key };
       // doc storici (nota A7): esiti calcolati, ma nessun segnale doc-stale
+      const historical = historicalDoc || superati.at(claim.line);
       if (historical) base.historical = historical;
       if (isIgnored(rules, claim, docRel)) {
         out.push({ ...base, status: 'ignored', method: 'allow-list', evidence: [] });

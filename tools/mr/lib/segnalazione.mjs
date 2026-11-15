@@ -99,7 +99,9 @@ const QUANDO = '**Quando:** dopo la task in corso (MR segnala, non blocca); subi
  *        tableHeader(doc, line): intestazione della tabella che contiene la riga, o '' (0.6-k);
  *        rawLine(doc, line): la sola riga, per le regole «sulla stessa riga» (0.6-q);
  *        paragraph(doc, line): { lines, at } righe del paragrafo e indice della riga, per legare
- *        il verbo di rimozione al nome (0.6-r); senza, si usa la sola riga
+ *        il verbo di rimozione al nome (0.6-r); senza, si usa la sola riga;
+ *        altri(claims): per ogni claim con causa, il repo dell'indice in cui il nome c'è o null
+ *        (0.6-z37, lib/altri.mjs): se c'è, external in appendice, non segnalazione
  */
 export function toSegnalazioni(meta, records, refs, repoFor, opts = {}) {
   if (opts.onlyCaused) return toSegnalazioniCausate(meta, records, repoFor, opts);
@@ -164,6 +166,7 @@ function toSegnalazioniCausate(meta, records, repoFor, opts) {
   // repo in cui cercare la causa: quelli del doc (mappa del giro), o quelli dati, o quello del claim
   const repos = (r) => opts.reposForDoc?.(r.doc) || opts.reposForCause || [repoFor(r.code_repo)];
   const proved = new Map();
+  const causati = []; // claim con causa verificata, prima del controllo negli altri repo (0.6-z37)
   const appendix = [];
   for (const r of records) {
     if (r.historical || r.status !== 'not_found') continue;
@@ -239,9 +242,19 @@ function toSegnalazioniCausate(meta, records, repoFor, opts) {
       appendix.push({ doc: r.doc, line: r.line, kind: r.kind, claim: r.claim, reason: 'nessuna prova che sia esistito' });
       continue;
     }
-    if (!proved.has(r.doc)) proved.set(r.doc, []);
-    proved.get(r.doc).push({ ...r, cause });
+    causati.push({ ...r, cause });
   }
+  // 0.6-z37 (fix 1 e 2 del giro 7): prima di dichiarare deriva, il nome si cerca negli altri repo
+  // dell'indice (opts.altri(items) → nome del repo o null per item): se c'è, è external, non deriva
+  const altrove = opts.altri ? opts.altri(causati) : causati.map(() => null);
+  causati.forEach((r, i) => {
+    if (altrove[i]) {
+      appendix.push({ doc: r.doc, line: r.line, kind: r.kind, claim: r.claim, reason: `external: c'è in ${altrove[i]} (altro repo dell'indice)` });
+      return;
+    }
+    if (!proved.has(r.doc)) proved.set(r.doc, []);
+    proved.get(r.doc).push(r);
+  });
   const out = [];
   for (const [doc, claims] of [...proved.entries()].sort()) {
     const L = [];

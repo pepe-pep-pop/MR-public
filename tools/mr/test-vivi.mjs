@@ -112,6 +112,66 @@ test('JSON (0.6-z6, rilievo 4): stessa forma di `mr date --json`: meta + items c
   assert(JSON.stringify(v.vivi) === JSON.stringify(v.items) && /usa items/.test(v.deprecato.vivi), 'alias vivi uguale a items, dichiarato deprecato');
 });
 
+test('status active/draft prevale sul path (0.6-z37, D); doc datati con «Stato: da inviare» in testa (C); data compatta', () => {
+  const r2 = join(base, 'app2');
+  const fm = (st) => `---\nmr_version: '0.6'\nid: a/x\ntitle: "T"\ntype: guide\nowner: a\nstatus: ${st}\ncreated: '2026-01-01'\nlast_updated: '2026-01-01'\n---\n\n# T\n`;
+  write(r2, 'docs/hof-solo-1.md', fm('active'));
+  write(r2, 'docs/hof-app-2.md', fm('done'));
+  write(r2, 'docs/piani/piano-a.md', fm('draft'));
+  write(r2, 'docs/2026-10-01-richiesta.md', '# Richiesta\n\n**Stato:** da inviare\n');
+  write(r2, 'docs/2026-10-02-nota.md', '# Nota\n\nStato: chiusa\n');
+  write(r2, 'docs/hof-app-3.md', '# H\n\nStato: in corso\n');
+  write(r2, 'docs/esito-20261012/riepilogo.md', '# Esito\n');
+  write(r2, 'docs/esito-20261013/aperto.md', fm('active'));
+  write(r2, 'test-files/nota.md', fm('active'));
+  execFileSync('git', ['init', '-q', r2]);
+  const v = JSON.parse(run(r2, 'vivi', '.', '--json').out);
+  const vivi = v.items.map((x) => x.doc).sort();
+  assert(JSON.stringify(vivi) === JSON.stringify(['docs/2026-10-01-richiesta.md', 'docs/esito-20261013/aperto.md', 'docs/hof-solo-1.md', 'docs/piani/piano-a.md']), vivi.join(', '));
+  const mot = Object.fromEntries(v.non_vivi.map((n) => [n.doc, n.motivo]));
+  assert(mot['docs/esito-20261012/riepilogo.md'] === 'datato' && mot['docs/hof-app-3.md'] === 'hof-*' && mot['test-files/nota.md'] === 'fixture di test', `«Stato:» vale solo per i datati, mai per le fixture: ${JSON.stringify(mot)}`);
+});
+
+test('solo l\'ultimo hof di ogni agente è vivo (0.6-z38); generato_da toglie un log dai vivi, status active compreso', () => {
+  const r3 = join(base, 'app3');
+  const fm = (st, extra = '') => `---\nmr_version: '0.6'\nid: a/x\ntitle: "T"\ntype: log\nowner: a\nstatus: ${st}\ncreated: '2026-01-01'\nlast_updated: '2026-01-01'\n${extra}---\n\n# T\n`;
+  for (const n of ['hof-zeta-9', 'hof-zeta-10', 'hof_zeta_X8']) write(r3, `h/${n}.md`, fm('active'));
+  write(r3, 'h/hof-zeta-mc-1.md', fm('active')); // altro agente: zeta-mc
+  write(r3, 'h/hof-beta-6B.md', fm('active'));
+  write(r3, 'h/hof-beta-7F.md', fm('active'));
+  write(r3, 'altro/hof-zeta-2.md', fm('active')); // altra cartella: altro gruppo
+  write(r3, 'h/hof-gamma.md', fm('active'));
+  write(r3, 'h/hof-gamma-1.md', fm('active'));
+  write(r3, 'log/cron-2026.md', fm('active', 'generato_da: cron\n'));
+  write(r3, 'log/a-mano.md', fm('active'));
+  write(r3, 'log/vuoto.md', fm('active', 'generato_da: ""\n'));
+  execFileSync('git', ['init', '-q', r3]);
+  const env = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+  execFileSync('git', ['-C', r3, 'add', 'h/hof-gamma.md'], { env });
+  execFileSync('git', ['-C', r3, 'commit', '-q', '-m', 'a', '--date', '2026-01-01T00:00:00'], { env: { ...env, GIT_COMMITTER_DATE: '2026-01-01T00:00:00' } });
+  execFileSync('git', ['-C', r3, 'add', 'h/hof-gamma-1.md'], { env });
+  execFileSync('git', ['-C', r3, 'commit', '-q', '-m', 'b'], { env });
+  const v = JSON.parse(run(r3, 'vivi', '.', '--json').out);
+  const vivi = v.items.map((x) => x.doc).sort();
+  assert(JSON.stringify(vivi) === JSON.stringify(['altro/hof-zeta-2.md', 'h/hof-beta-7F.md', 'h/hof-gamma-1.md', 'h/hof-zeta-10.md', 'h/hof-zeta-mc-1.md', 'log/a-mano.md', 'log/vuoto.md']), vivi.join(', '));
+  const mot = Object.fromEntries(v.non_vivi.map((n) => [n.doc, n.motivo]));
+  assert(mot['h/hof-zeta-9.md'] === 'hof superato da hof-zeta-10.md' && mot['h/hof_zeta_X8.md'] === 'hof superato da hof-zeta-10.md', JSON.stringify(mot));
+  assert(mot['h/hof-beta-6B.md'] === 'hof superato da hof-beta-7F.md', 'lettere dietro il numero');
+  assert(mot['h/hof-gamma.md'] === 'hof superato da hof-gamma-1.md', 'senza numero: vale la data di commit');
+  assert(mot['log/cron-2026.md'] === 'generato_da: cron' && v.meta.non_vivi.generato === 1, JSON.stringify(v.meta.non_vivi));
+});
+
+test('regola storico: della allow-list centrale per cartelle di log automatici (equivale alla forma log: proposta)', () => {
+  const r4 = join(base, 'app4');
+  write(r4, 'docs/monitor/oggi.md', '# Log del monitor\n');
+  write(r4, 'docs/guida.md', '# Guida\n');
+  execFileSync('git', ['init', '-q', r4]);
+  const cen = join(base, 'cen4');
+  write(cen, 'app4.ignore', 'storico:docs/monitor/*\n');
+  const v = JSON.parse(run(r4, 'vivi', '.', '--json', '--ignore-dir', cen, '--workspace', 'app4').out);
+  assert(v.items.map((x) => x.doc).join() === 'docs/guida.md' && v.non_vivi[0].motivo === 'regola storico:', JSON.stringify(v.non_vivi));
+});
+
 rmSync(base, { recursive: true, force: true });
 const ok = results.filter(Boolean).length;
 console.log(`\nRisultato: ${ok}/${results.length} ${ok === results.length ? 'PASS' : 'FAIL'}`);
